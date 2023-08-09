@@ -1,0 +1,33 @@
+[project]
+name = "biobank-olink"
+version = "0.0.1"
+description = ""
+readme = "README.md"
+authors = [
+    { name = "Arkadiusz Sitek", email = "asitek@mgh.harvard.edu" },
+    { name = "Pawel Renc", email = "prenc@mgh.harvard.edu" },
+]
+dependencies = [
+    'importlib-metadata; python_version>="3.10"',
+    "pandas",
+    "hdbscan",
+    "seaborn",
+    "scikit-learn",
+    "phate",
+    "umap-learn",
+    "shap",
+    "xgboost",
+    "numba==0.56.4"
+]
+
+[project.optional-dependencies]
+all = ["jupyter", ]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+
+[tool.setuptools]
+packages = ["biobank_olink"]
+
+[tool.setuptools.package-data]
+"biobank_olink.data" = ["*"]
