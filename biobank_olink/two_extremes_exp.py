@@ -8,6 +8,7 @@ import time
 import warnings
 from copy import deepcopy
 from datetime import datetime
+from enum import Enum
 from functools import partial
 from multiprocessing import Process, Queue
 from pathlib import Path
@@ -39,22 +40,20 @@ OPTUNA_STATE_CHECKED = (TrialState.PRUNED, TrialState.COMPLETE)
 logger = get_color_logger()
 
 
-class Target:
-    SBP = "sbp"
-    DBP = "dbp"
-    ALL = (SBP, DBP)
+class TargetType(Enum):
+    SBP = "SBP"
+    DBP = "DBP"
+    PP = "PP"
 
 
-class NanHandling:
+class NanHandlingType(Enum):
     REMOVE = "remove"
     IGNORE = "ignore"
-    ALL = (REMOVE, IGNORE)
 
 
-class CorrHandling:
+class CorrHandlingType(Enum):
     IGNORE = "ignore"
     DROP = "drop"
-    ALL = (IGNORE, DROP)
 
 
 def get_model(params, args):
@@ -193,26 +192,23 @@ def execute_outer_cross_validation_loop(x, y, args):
 
 
 def get_data(args):
-    if args.nan_handling == NanHandling.REMOVE:
+    if args.nan_handling == NanHandlingType.REMOVE:
         ol_df, cov_df = load_datasets(cols_na_th=0.3, rows_na_th=0.3)
-    elif args.nan_handling == NanHandling.IGNORE:
+    elif args.nan_handling == NanHandlingType.IGNORE:
         ol_df, cov_df = load_datasets(cols_na_th=0, rows_na_th=0)
 
+    # 0 - NTN, 1 - HTN no meds, 2 - HTN meds (we consider only 0 and 1 in the experiment)
     cov_df = cov_df.loc[cov_df.HTNgroup < 2]
     ol_df = ol_df.loc[cov_df.index]
 
-    if args.corr_handling == CorrHandling.DROP:
+    if args.corr_handling == CorrHandlingType.DROP:
         ol_df_corr = ol_df.corr()
         mask = np.triu(np.ones(ol_df_corr.shape), k=1).astype(bool)
         high_corr = ol_df_corr.where(mask)
         cols_to_remove = [column for column in high_corr.columns if any(high_corr[column] > 0.9)]
         ol_df.drop(columns=cols_to_remove, inplace=True)
 
-    if args.target == Target.SBP:
-        target = "SBP"
-    else:
-        target = "DBP"
-
+    target = args.target.value
     lower_bound, upper_bound = cov_df[target].quantile([args.threshold, 1 - args.threshold]).values
     low_cov_df = cov_df[cov_df[target] < lower_bound]
     high_cov_df = cov_df[upper_bound < cov_df[target]]
@@ -252,8 +248,12 @@ def get_data(args):
 
 
 def run_experiment(args):
+    args.target = TargetType(args.target)
+    args.nan_handling = NanHandlingType(args.nan_handling)
+    args.corr_handling = CorrHandlingType(args.corr_handling)
     args.study_name = "two_extremes_exp_{}_th{}_nan_{}_corr_{}_s{}".format(
-        args.target, args.threshold, args.nan_handling, args.corr_handling, args.seed
+        args.target.value.lower(), args.threshold, args.nan_handling.value,
+        args.corr_handling.value, args.seed
     )
     logger.info(f"Study started: '{args.study_name}'")
     args.working_dir = Path(args.working_dir)
@@ -276,14 +276,15 @@ def run_experiment(args):
                   default=lambda obj: obj.__name__ if hasattr(obj, "__name__") else "unknown")
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--threshold', type=float, default=0.35, metavar='N')
-    parser.add_argument('--target', type=str, choices=Target.ALL, default=Target.ALL[0])
-    parser.add_argument('--nan_handling', type=str, choices=NanHandling.ALL,
-                        default=NanHandling.ALL[0])
-    parser.add_argument('--corr_handling', type=str, choices=CorrHandling.ALL,
-                        default=CorrHandling.ALL[0])
+    parser.add_argument('--threshold', type=float, default=0.35)
+    parser.add_argument('--target', type=str, default=TargetType.SBP.value,
+                        choices=[t.value for t in TargetType])
+    parser.add_argument('--nan_handling', type=str, default=NanHandlingType.REMOVE.value,
+                        choices=[t.value for t in NanHandlingType])
+    parser.add_argument('--corr_handling', type=str, default=CorrHandlingType.IGNORE.value,
+                        choices=[t.value for t in CorrHandlingType])
     parser.add_argument('--outer_splits', type=int, default=1, metavar='N',
                         help="number of outer splits of dataset")
     parser.add_argument('--inner_splits', type=int, default=2, metavar='N',
@@ -291,10 +292,14 @@ if __name__ == '__main__':
                              "score Optuna bases on")
     parser.add_argument('--n_trials', type=int, default=5, metavar='N',
                         help="number of trials for Optuna")
-    parser.add_argument('--optuna_n_workers', type=int, default=1, metavar='N',
+    parser.add_argument('-w', '--optuna_n_workers', type=int, default=1, metavar='N',
                         help="number of workers for Optuna")
-    parser.add_argument('--seed', type=int, default=42, metavar='S', help='random seed')
-    parser.add_argument('--working_dir', type=str, default=".", metavar='N')
+    parser.add_argument('--seed', type=int, default=42, metavar='N', help='random seed')
+    parser.add_argument('--working_dir', type=str, default=".", metavar='PATH')
 
     args = parser.parse_args()
     run_experiment(args)
+
+
+if __name__ == '__main__':
+    main()

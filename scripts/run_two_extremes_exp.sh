@@ -1,12 +1,12 @@
 #!/bin/bash
 
-python scripts/two_extremes_exp.py \
+two-extremes-exp \
     --threshold 0.35 \
-    --target sbp \
+    --target SBP \
     --nan_handling remove \
-    --corr_handling ignore \
+    --corr_handling drop \
     --outer_splits 5 \
     --inner_splits 5 \
-    --n_trials 1000 \
+    --n_trials 200 \
     --optuna_n_workers 2 \
     --seed 42

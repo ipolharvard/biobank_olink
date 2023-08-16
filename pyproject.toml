@@ -22,7 +22,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-all = ["jupyter", ]
+all = ["jupyter"]
+
+[project.scripts]
+two-extremes-exp = "biobank_olink.two_extremes_exp:main"
 
 [build-system]
 requires = ["setuptools", "wheel"]
