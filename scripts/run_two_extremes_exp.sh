@@ -7,6 +7,7 @@ two-extremes-exp \
     --corr_handling drop \
     --outer_splits 5 \
     --inner_splits 5 \
-    --n_trials 200 \
-    --optuna_n_workers 2 \
+    --n_trials 500 \
+    --optuna_n_workers 10 \
+    --num_gpus 8 \
     --seed 42

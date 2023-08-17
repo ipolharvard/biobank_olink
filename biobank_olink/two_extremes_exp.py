@@ -3,15 +3,13 @@ The whole experiment is defined in this file. It is a bit long, but it is not th
 """
 import argparse
 import json
-import random
 import time
 import warnings
 from copy import deepcopy
 from datetime import datetime
-from enum import Enum
 from functools import partial
-from multiprocessing import Process, Queue
-from pathlib import Path
+from importlib.resources import files
+from multiprocessing import Process, Queue, current_process
 
 import numpy as np
 import optuna
@@ -30,34 +28,43 @@ from biobank_olink.utils import get_color_logger
 
 warnings.filterwarnings("ignore", category=ExperimentalWarning)
 
-THREADS_PER_WORKER = 2
-
-RESULTS_DIR = "results"
-OPTUNA_DB_DIR = "optuna_dbs"
-
+DATA_DIR = files("biobank_olink.data")
+RESULTS_DIR = DATA_DIR / "results"
+OPTUNA_DB_DIR = DATA_DIR / "optuna_dbs"
 OPTUNA_STATE_CHECKED = (TrialState.PRUNED, TrialState.COMPLETE)
 
 logger = get_color_logger()
 
 
-class TargetType(Enum):
+class TargetType:
     SBP = "SBP"
     DBP = "DBP"
     PP = "PP"
+    ALL = (SBP, DBP, PP)
 
 
-class NanHandlingType(Enum):
+class NanHandlingType:
     REMOVE = "remove"
     IGNORE = "ignore"
+    ALL = (REMOVE, IGNORE)
 
 
-class CorrHandlingType(Enum):
+class CorrHandlingType:
     IGNORE = "ignore"
     DROP = "drop"
+    ALL = (IGNORE, DROP)
 
 
 def get_model(params, args):
-    gpu_id = random.randint(0, 1)
+    name = current_process().name
+    values = name.split("-")[-1].split(":")
+    if len(values) == 2:
+        outer_process, inner_process = values
+    else:
+        outer_process = values[0]
+        inner_process = 0
+    proc_num = int(outer_process) * args.outer_splits + int(inner_process)
+    gpu_id = proc_num % args.num_gpus
     return XGBClassifier(tree_method="gpu_hist", gpu_id=gpu_id, random_state=args.seed,
                          **params)
 
@@ -109,9 +116,8 @@ def run_optuna_search(trial: optuna.Trial, dataset, args):
 
 
 def get_optuna_optimized_params(study_name, dataset, args):
-    optuna_dbs_dir = args.working_dir / OPTUNA_DB_DIR
-    optuna_dbs_dir.mkdir(exist_ok=True)
-    storage = JournalStorage(JournalFileStorage(str(optuna_dbs_dir / f"{study_name}.db")))
+    OPTUNA_DB_DIR.mkdir(exist_ok=True)
+    storage = JournalStorage(JournalFileStorage(str(OPTUNA_DB_DIR / f"{study_name}.db")))
     callbacks = [MaxTrialsCallback(args.n_trials, states=OPTUNA_STATE_CHECKED)]
 
     study = optuna.create_study(study_name=study_name, direction="maximize", storage=storage,
@@ -120,8 +126,8 @@ def get_optuna_optimized_params(study_name, dataset, args):
     def run_optuna_worker():
         study = optuna.load_study(study_name=study_name, storage=storage,
                                   sampler=optuna.samplers.TPESampler(seed=None),
-                                  pruner=optuna.pruners.MedianPruner(n_startup_trials=20,
-                                                                     n_warmup_steps=3))
+                                  pruner=optuna.pruners.MedianPruner(n_startup_trials=100,
+                                                                     n_warmup_steps=2))
         objective = partial(run_optuna_search, dataset=dataset, args=deepcopy(args))
         study.optimize(func=objective, callbacks=callbacks)
 
@@ -137,14 +143,15 @@ def get_optuna_optimized_params(study_name, dataset, args):
     for p in processes:
         p.join()
 
-    return study.best_trial.params
+    num_trials = len(study.get_trials(deepcopy=False, states=OPTUNA_STATE_CHECKED))
+    return study.best_trial.params, num_trials
 
 
 def one_fold_experiment_run(queue, temp_dataset, test_dataset, fold_num, args):
     study_name = args.study_name + f"_f{fold_num}"
     start_time = time.time()
 
-    best_params = get_optuna_optimized_params(study_name, temp_dataset, args)
+    best_params, num_trials = get_optuna_optimized_params(study_name, temp_dataset, args)
     logger.info(f"Got best params for '{study_name}': {dict(best_params)}")
 
     train_x, train_y = temp_dataset
@@ -161,9 +168,10 @@ def one_fold_experiment_run(queue, temp_dataset, test_dataset, fold_num, args):
         "timestamp": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
         "elapsed_time": time.time() - start_time,
         "fold_num": fold_num,
+        "num_trials": num_trials,
         **args.__dict__,
         "feat_importance": pd.Series(model.feature_importances_, index=train_x.columns).nlargest(
-            50).to_dict()
+            500).to_dict()
     }
 
     queue.put(summary)
@@ -208,7 +216,7 @@ def get_data(args):
         cols_to_remove = [column for column in high_corr.columns if any(high_corr[column] > 0.9)]
         ol_df.drop(columns=cols_to_remove, inplace=True)
 
-    target = args.target.value
+    target = args.target
     lower_bound, upper_bound = cov_df[target].quantile([args.threshold, 1 - args.threshold]).values
     low_cov_df = cov_df[cov_df[target] < lower_bound]
     high_cov_df = cov_df[upper_bound < cov_df[target]]
@@ -248,15 +256,10 @@ def get_data(args):
 
 
 def run_experiment(args):
-    args.target = TargetType(args.target)
-    args.nan_handling = NanHandlingType(args.nan_handling)
-    args.corr_handling = CorrHandlingType(args.corr_handling)
     args.study_name = "two_extremes_exp_{}_th{}_nan_{}_corr_{}_s{}".format(
-        args.target.value.lower(), args.threshold, args.nan_handling.value,
-        args.corr_handling.value, args.seed
+        args.target.lower(), args.threshold, args.nan_handling, args.corr_handling, args.seed
     )
     logger.info(f"Study started: '{args.study_name}'")
-    args.working_dir = Path(args.working_dir)
 
     x, y = get_data(args)
     logger.info(f"Data loaded, x: {x.shape}, y: {y.shape}")
@@ -269,9 +272,8 @@ def run_experiment(args):
     else:
         logger.info(message)
 
-    result_dir = args.working_dir / RESULTS_DIR
-    result_dir.mkdir(exist_ok=True)
-    with open(result_dir / f"{args.study_name}.json", "w") as f:
+    RESULTS_DIR.mkdir(exist_ok=True)
+    with open(RESULTS_DIR / f"{args.study_name}.json", "w") as f:
         json.dump(experiment_results, f, indent=4,
                   default=lambda obj: obj.__name__ if hasattr(obj, "__name__") else "unknown")
 
@@ -279,12 +281,11 @@ def run_experiment(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--threshold', type=float, default=0.35)
-    parser.add_argument('--target', type=str, default=TargetType.SBP.value,
-                        choices=[t.value for t in TargetType])
-    parser.add_argument('--nan_handling', type=str, default=NanHandlingType.REMOVE.value,
-                        choices=[t.value for t in NanHandlingType])
-    parser.add_argument('--corr_handling', type=str, default=CorrHandlingType.IGNORE.value,
-                        choices=[t.value for t in CorrHandlingType])
+    parser.add_argument('--target', type=str, default=TargetType.SBP, choices=TargetType.ALL)
+    parser.add_argument('--nan_handling', type=str, default=NanHandlingType.REMOVE,
+                        choices=NanHandlingType.ALL)
+    parser.add_argument('--corr_handling', type=str, default=CorrHandlingType.IGNORE,
+                        choices=CorrHandlingType.ALL)
     parser.add_argument('--outer_splits', type=int, default=1, metavar='N',
                         help="number of outer splits of dataset")
     parser.add_argument('--inner_splits', type=int, default=2, metavar='N',
@@ -294,8 +295,8 @@ def main():
                         help="number of trials for Optuna")
     parser.add_argument('-w', '--optuna_n_workers', type=int, default=1, metavar='N',
                         help="number of workers for Optuna")
+    parser.add_argument('--num_gpus', type=int, default=1, metavar='N')
     parser.add_argument('--seed', type=int, default=42, metavar='N', help='random seed')
-    parser.add_argument('--working_dir', type=str, default=".", metavar='PATH')
 
     args = parser.parse_args()
     run_experiment(args)
