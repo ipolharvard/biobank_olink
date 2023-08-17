@@ -9,7 +9,7 @@ from copy import deepcopy
 from datetime import datetime
 from functools import partial
 from importlib.resources import files
-from multiprocessing import Process, Queue, current_process
+from multiprocessing import Process, Queue, current_process, Manager
 
 import numpy as np
 import optuna
@@ -148,20 +148,20 @@ def get_optuna_optimized_params(study_name, dataset, args):
     return study.best_trial.params, num_trials
 
 
-def one_fold_experiment_run(queue, temp_dataset, test_dataset, fold_num, args):
+def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args):
     study_name = args.study_name + f"_f{fold_num}"
     start_time = time.time()
 
     best_params, num_trials = get_optuna_optimized_params(study_name, temp_dataset, args)
     logger.info(f"Got best params for '{study_name}': {dict(best_params)}")
 
-    train_x, train_y = temp_dataset
-    test_x, test_y = test_dataset
+    x_train, y_train = temp_dataset
+    x_test, y_test = test_dataset
 
     model = get_model(best_params, args)
-    model.fit(train_x, train_y)
-    y_proba = model.predict_proba(test_x)[:, 1]
-    auc_score = roc_auc_score(test_y, y_proba)
+    model.fit(x_train, y_train)
+    y_proba = model.predict_proba(x_test)[:, 1]
+    auc_score = roc_auc_score(y_test, y_proba)
 
     summary = {
         "auc_score": auc_score,
@@ -171,32 +171,33 @@ def one_fold_experiment_run(queue, temp_dataset, test_dataset, fold_num, args):
         "fold_num": fold_num,
         "num_trials": num_trials,
         **args.__dict__,
-        "feat_importance": pd.Series(model.feature_importances_, index=train_x.columns).nlargest(
-            500).to_dict()
+        "feat_importance": pd.Series(model.feature_importances_, index=x_train.columns).to_dict(),
+        "y_test": y_test.tolist(),
+        "y_proba": y_proba.tolist(),
     }
 
-    queue.put(summary)
+    sh_dict[fold_num] = summary
     logger.info(f"Fold completed '{study_name}', auc_score: {summary['auc_score']:.4f}")
 
 
 def execute_outer_cross_validation_loop(x, y, args):
     kf = KFold(n_splits=args.outer_splits, shuffle=True, random_state=args.seed)
-    processes, queue = [], Queue()
+    processes, mgr = [], Manager()
+    d = mgr.dict()
     for fold_num, (train_index, test_index) in enumerate(kf.split(x)):
         temp_dataset = (x.iloc[train_index], y[train_index])
         test_dataset = (x.iloc[test_index], y[test_index])
 
         p = Process(target=one_fold_experiment_run,
-                    args=(queue, temp_dataset, test_dataset, fold_num, args))
+                    args=(d, temp_dataset, test_dataset, fold_num, args))
         p.start()
         processes.append(p)
 
     for p in processes:
         p.join()
 
-    experiment_results = []
-    while not queue.empty():
-        experiment_results.append(queue.get())
+    experiment_results = list(d.values())
+    mgr.shutdown()
     return experiment_results
 
 
@@ -218,7 +219,7 @@ def get_data(args):
         ol_df.drop(columns=cols_to_remove, inplace=True)
 
     if args.target == TargetType.PP2:
-        cov_df["PP2"] = (cov_df["SBP"] - cov_df["DPB"]) / (cov_df["SBP"] + cov_df["DPB"]) * 2
+        cov_df["PP2"] = (cov_df["SBP"] - cov_df["DBP"]) / (cov_df["SBP"] + cov_df["DBP"]) * 2
     lower_bound, upper_bound = cov_df[args.target].quantile(
         [args.threshold, 1 - args.threshold]).values
     low_cov_df = cov_df[cov_df[args.target] < lower_bound]
@@ -289,7 +290,7 @@ def main():
                         choices=NanHandlingType.ALL)
     parser.add_argument('--corr_handling', type=str, default=CorrHandlingType.IGNORE,
                         choices=CorrHandlingType.ALL)
-    parser.add_argument('--outer_splits', type=int, default=1, metavar='N',
+    parser.add_argument('--outer_splits', type=int, default=2, metavar='N',
                         help="number of outer splits of dataset")
     parser.add_argument('--inner_splits', type=int, default=2, metavar='N',
                         help="number of inner splits in each outer split, and also this is the "
