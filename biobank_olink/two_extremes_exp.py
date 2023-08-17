@@ -40,7 +40,8 @@ class TargetType:
     SBP = "SBP"
     DBP = "DBP"
     PP = "PP"
-    ALL = (SBP, DBP, PP)
+    PP2 = "PP2"
+    ALL = (SBP, DBP, PP, PP2)
 
 
 class NanHandlingType:
@@ -216,10 +217,12 @@ def get_data(args):
         cols_to_remove = [column for column in high_corr.columns if any(high_corr[column] > 0.9)]
         ol_df.drop(columns=cols_to_remove, inplace=True)
 
-    target = args.target
-    lower_bound, upper_bound = cov_df[target].quantile([args.threshold, 1 - args.threshold]).values
-    low_cov_df = cov_df[cov_df[target] < lower_bound]
-    high_cov_df = cov_df[upper_bound < cov_df[target]]
+    if args.target == TargetType.PP2:
+        cov_df["PP2"] = (cov_df["SBP"] - cov_df["DPB"]) / (cov_df["SBP"] + cov_df["DPB"]) * 2
+    lower_bound, upper_bound = cov_df[args.target].quantile(
+        [args.threshold, 1 - args.threshold]).values
+    low_cov_df = cov_df[cov_df[args.target] < lower_bound]
+    high_cov_df = cov_df[upper_bound < cov_df[args.target]]
 
     correction_df = pd.concat([low_cov_df, high_cov_df])
     correction_cols = ["Sex", "age", "BMI"]
@@ -249,7 +252,7 @@ def get_data(args):
         chosen.add(p2_idx)
 
     chosen_cov_df = cov_df.loc[list(chosen)]
-    high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[target]]
+    high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[args.target]]
     x = ol_df.loc[chosen_cov_df.index]
     y = chosen_cov_df.index.isin(high_cov_df.index)
     return x, y
