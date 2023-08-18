@@ -9,7 +9,7 @@ from copy import deepcopy
 from datetime import datetime
 from functools import partial
 from importlib.resources import files
-from multiprocessing import Process, Queue, current_process, Manager
+from multiprocessing import Process, current_process, Manager
 
 import numpy as np
 import optuna
@@ -19,9 +19,9 @@ from optuna.exceptions import ExperimentalWarning
 from optuna.storages import JournalStorage, JournalFileStorage
 from optuna.trial import TrialState
 from scipy.spatial.distance import squareform, pdist
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, r2_score
 from sklearn.model_selection import KFold
-from xgboost import XGBClassifier
+from xgboost import XGBClassifier, XGBRegressor
 
 from biobank_olink.dataset import load_datasets
 from biobank_olink.utils import get_color_logger
@@ -34,6 +34,12 @@ OPTUNA_DB_DIR = DATA_DIR / "optuna_dbs"
 OPTUNA_STATE_CHECKED = (TrialState.PRUNED, TrialState.COMPLETE)
 
 logger = get_color_logger()
+
+
+class ExpType:
+    CLS = "cls"
+    REG = "reg"
+    ALL = (CLS, REG)
 
 
 class TargetType:
@@ -66,8 +72,10 @@ def get_model(params, args):
         inner_process = 0
     proc_num = int(outer_process) * args.outer_splits + int(inner_process)
     gpu_id = proc_num % args.num_gpus
-    return XGBClassifier(tree_method="gpu_hist", gpu_id=gpu_id, random_state=args.seed,
-                         **params)
+
+    xgboost_cls = XGBClassifier if args.exp_type == ExpType.CLS else XGBRegressor
+    return xgboost_cls(tree_method="gpu_hist", gpu_id=gpu_id, random_state=args.seed,
+                       **params)
 
 
 def cross_validation_loop(dataset, model_params, args, trial):
@@ -81,14 +89,18 @@ def cross_validation_loop(dataset, model_params, args, trial):
 
         model = get_model(model_params, args)
         model.fit(train_x, train_y)
-        y_proba = model.predict_proba(test_x)[:, 1]
-        auc_score = roc_auc_score(test_y, y_proba)
+        if args.exp_type == ExpType.CLS:
+            y_proba = model.predict_proba(test_x)[:, 1]
+            score = roc_auc_score(test_y, y_proba)
+        else:
+            y_pred = model.predict(test_x)
+            score = r2_score(test_y, y_pred)
 
-        trial.report(auc_score, i)
+        trial.report(score, i)
         if trial.should_prune():
             raise optuna.TrialPruned()
 
-        intermediate_scores.append(auc_score)
+        intermediate_scores.append(score)
 
     return sum(intermediate_scores) / len(intermediate_scores)
 
@@ -160,11 +172,17 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
 
     model = get_model(best_params, args)
     model.fit(x_train, y_train)
-    y_proba = model.predict_proba(x_test)[:, 1]
-    auc_score = roc_auc_score(y_test, y_proba)
 
-    summary = {
-        "auc_score": auc_score,
+    summary = {}
+    if args.exp_type == ExpType.CLS:
+        y_proba = model.predict_proba(x_test)[:, 1]
+        auc_score = roc_auc_score(y_test, y_proba)
+        summary["auc_score"] = auc_score
+    else:
+        y_proba = model.predict(x_test)
+        summary["r2_score"] = r2_score(y_test, y_proba)
+
+    summary.update({
         **best_params,
         "timestamp": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
         "elapsed_time": time.time() - start_time,
@@ -174,10 +192,11 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
         "feat_importance": pd.Series(model.feature_importances_, index=x_train.columns).to_dict(),
         "y_test": y_test.tolist(),
         "y_proba": y_proba.tolist(),
-    }
+    })
 
     sh_dict[fold_num] = summary
-    logger.info(f"Fold completed '{study_name}', auc_score: {summary['auc_score']:.4f}")
+    logger.info(f"Fold completed '{study_name}', " + f"auc_score: {summary['auc_score']:.4f}" if
+                args.exp_type == ExpType.CLS else f"r2_score: {summary['r2_score']:.4f}")
 
 
 def execute_outer_cross_validation_loop(x, y, args):
@@ -220,42 +239,48 @@ def get_data(args):
 
     if args.target == TargetType.PP2:
         cov_df["PP2"] = (cov_df["SBP"] - cov_df["DBP"]) / (cov_df["SBP"] + cov_df["DBP"]) * 2
-    lower_bound, upper_bound = cov_df[args.target].quantile(
-        [args.threshold, 1 - args.threshold]).values
-    low_cov_df = cov_df[cov_df[args.target] < lower_bound]
-    high_cov_df = cov_df[upper_bound < cov_df[args.target]]
 
-    correction_df = pd.concat([low_cov_df, high_cov_df])
-    correction_cols = ["Sex", "age", "BMI"]
-    correction_df = correction_df[correction_cols]
-    correction_df = (correction_df - correction_df.mean()) / correction_df.std()
+    if args.exp_type == ExpType.CLS:
+        lower_bound, upper_bound = cov_df[args.target].quantile(
+            [args.threshold, 1 - args.threshold]).values
+        low_cov_df = cov_df[cov_df[args.target] < lower_bound]
+        high_cov_df = cov_df[upper_bound < cov_df[args.target]]
 
-    similarities = squareform(pdist(correction_df, metric="euclidean"))
-    np.fill_diagonal(similarities, np.inf)
-    similarities_df = pd.DataFrame(similarities, index=correction_df.index,
-                                   columns=correction_df.index)
-    del similarities
-    similarities_sub_df = similarities_df.loc[low_cov_df.index, high_cov_df.index]
+        correction_df = pd.concat([low_cov_df, high_cov_df])
+        correction_cols = ["Sex", "age", "BMI"]
+        correction_df = correction_df[correction_cols]
+        correction_df = (correction_df - correction_df.mean()) / correction_df.std()
 
-    paired_up_df = similarities_sub_df.idxmin().to_frame("p2_id")
-    paired_up_df["dist"] = similarities_df.min()
-    paired_up_df2 = similarities_sub_df.T.idxmin().to_frame("p2_id")
-    paired_up_df2["dist"] = similarities_df.T.min()
-    del similarities_df
-    paired_up_df = pd.concat([paired_up_df, paired_up_df2])
-    paired_up_df.sort_values(by="dist", inplace=True)
+        similarities = squareform(pdist(correction_df, metric="euclidean"))
+        np.fill_diagonal(similarities, np.inf)
+        similarities_df = pd.DataFrame(similarities, index=correction_df.index,
+                                       columns=correction_df.index)
+        del similarities
+        similarities_sub_df = similarities_df.loc[low_cov_df.index, high_cov_df.index]
 
-    chosen = set()
-    for p1_idx, (p2_idx, _) in paired_up_df.iterrows():
-        if p1_idx in chosen or p2_idx in chosen:
-            continue
-        chosen.add(p1_idx)
-        chosen.add(p2_idx)
+        paired_up_df = similarities_sub_df.idxmin().to_frame("p2_id")
+        paired_up_df["dist"] = similarities_df.min()
+        paired_up_df2 = similarities_sub_df.T.idxmin().to_frame("p2_id")
+        paired_up_df2["dist"] = similarities_df.T.min()
+        del similarities_df
+        paired_up_df = pd.concat([paired_up_df, paired_up_df2])
+        paired_up_df.sort_values(by="dist", inplace=True)
 
-    chosen_cov_df = cov_df.loc[list(chosen)]
-    high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[args.target]]
-    x = ol_df.loc[chosen_cov_df.index]
-    y = chosen_cov_df.index.isin(high_cov_df.index)
+        chosen = set()
+        for p1_idx, (p2_idx, _) in paired_up_df.iterrows():
+            if p1_idx in chosen or p2_idx in chosen:
+                continue
+            chosen.add(p1_idx)
+            chosen.add(p2_idx)
+
+        chosen_cov_df = cov_df.loc[list(chosen)]
+        high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[args.target]]
+        x = ol_df.loc[chosen_cov_df.index]
+        y = chosen_cov_df.index.isin(high_cov_df.index)
+    else:
+        x = ol_df
+        y = cov_df[args.target].values
+
     return x, y
 
 
@@ -263,6 +288,8 @@ def run_experiment(args):
     args.study_name = "two_extremes_exp_{}_th{}_nan_{}_corr_{}_s{}".format(
         args.target.lower(), args.threshold, args.nan_handling, args.corr_handling, args.seed
     )
+    if args.exp_type == ExpType.REG:
+        args.study_name += "_reg"
     logger.info(f"Study started: '{args.study_name}'")
 
     x, y = get_data(args)
@@ -284,6 +311,7 @@ def run_experiment(args):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--exp_type', type=str, default=ExpType.CLS, choices=ExpType.ALL)
     parser.add_argument('--threshold', type=float, default=0.35)
     parser.add_argument('--target', type=str, default=TargetType.SBP, choices=TargetType.ALL)
     parser.add_argument('--nan_handling', type=str, default=NanHandlingType.REMOVE,
