@@ -9,16 +9,19 @@ from copy import deepcopy
 from datetime import datetime
 from functools import partial
 from importlib.resources import files
+from itertools import combinations
 from multiprocessing import Process, current_process, Manager
 
 import numpy as np
 import optuna
 import pandas as pd
+from joblib import Memory
 from optuna._callbacks import MaxTrialsCallback
 from optuna.exceptions import ExperimentalWarning
 from optuna.storages import JournalStorage, JournalFileStorage
 from optuna.trial import TrialState
 from scipy.spatial.distance import squareform, pdist
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score, r2_score
 from sklearn.model_selection import KFold
 from xgboost import XGBClassifier, XGBRegressor
@@ -35,11 +38,19 @@ OPTUNA_STATE_CHECKED = (TrialState.PRUNED, TrialState.COMPLETE)
 
 logger = get_color_logger()
 
+memory = Memory("cache", verbose=0)
+
 
 class ExpType:
     CLS = "cls"
     REG = "reg"
     ALL = (CLS, REG)
+
+
+class ModelType:
+    XGBOOST = "xgb"
+    LOGISTICREGRESSION = "lr"
+    ALL = (XGBOOST, LOGISTICREGRESSION)
 
 
 class TargetType:
@@ -50,32 +61,34 @@ class TargetType:
     ALL = (SBP, DBP, PP, PP2)
 
 
-class NanHandlingType:
-    REMOVE = "remove"
-    IGNORE = "ignore"
-    ALL = (REMOVE, IGNORE)
-
-
-class CorrHandlingType:
-    IGNORE = "ignore"
-    DROP = "drop"
-    ALL = (IGNORE, DROP)
+class PanelType:
+    WHOLE = "all"
+    INFLAMMATION = "inflammation"
+    NEUROLOGY = "neurology"
+    CARDIOMETABOLIC = "cardiometabolic"
+    ONCOLOGY = "oncology"
+    ALL = (WHOLE, INFLAMMATION, NEUROLOGY, CARDIOMETABOLIC, ONCOLOGY)
 
 
 def get_model(params, args):
-    name = current_process().name
-    values = name.split("-")[-1].split(":")
-    if len(values) == 2:
-        outer_process, inner_process = values
-    else:
-        outer_process = values[0]
-        inner_process = 0
-    proc_num = int(outer_process) * args.outer_splits + int(inner_process)
-    gpu_id = proc_num % args.num_gpus
+    if args.model == ModelType.XGBOOST:
+        name = current_process().name
+        values = name.split("-")[-1].split(":")
+        if len(values) == 2:
+            outer_process, inner_process = values
+        else:
+            outer_process = values[0]
+            inner_process = 0
+        proc_num = int(outer_process) * args.outer_splits + int(inner_process)
+        gpu_id = proc_num % args.num_gpus
 
-    xgboost_cls = XGBClassifier if args.exp_type == ExpType.CLS else XGBRegressor
-    return xgboost_cls(tree_method="gpu_hist", gpu_id=gpu_id, random_state=args.seed,
-                       **params)
+        xgboost_cls = XGBClassifier if args.exp_type == ExpType.CLS else XGBRegressor
+        return xgboost_cls(tree_method="gpu_hist", gpu_id=gpu_id, random_state=args.seed,
+                           **params)
+    elif args.model == ModelType.LOGISTICREGRESSION:
+        if args.exp_type == ExpType.REG:
+            raise ValueError("Logistic regression is not supported for regression tasks.")
+        return LogisticRegression(max_iter=10_000, penalty="l1", random_state=args.seed, **params)
 
 
 def cross_validation_loop(dataset, model_params, args, trial):
@@ -106,21 +119,29 @@ def cross_validation_loop(dataset, model_params, args, trial):
 
 
 def run_optuna_search(trial: optuna.Trial, dataset, args):
-    params = {
-        'learning_rate': trial.suggest_float('learning_rate', 0.001, 0.5, log=True),
-        'n_estimators': trial.suggest_int('n_estimators', 10, 2000),
-        'max_depth': trial.suggest_int('max_depth', 1, 20),
-        'min_child_weight': trial.suggest_int('min_child_weight', 1, 20),
-        'subsample': trial.suggest_float('subsample', 0.1, 1.0),
-        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.1, 1.0),
-        'colsample_bylevel': trial.suggest_float('colsample_bylevel', 0.1, 1.0),
-        'colsample_bynode': trial.suggest_float('colsample_bynode', 0.1, 1.0),
-        'gamma': trial.suggest_float('gamma', 0, 10),
-        'scale_pos_weight': trial.suggest_float('scale_pos_weight', 0.01, 20),
-        'reg_alpha': trial.suggest_float('reg_alpha', 0, 10),
-        'reg_lambda': trial.suggest_float('reg_lambda', 0, 10),
-        'grow_policy': trial.suggest_categorical('grow_policy', ['depthwise', 'lossguide']),
-    }
+    if args.model == ModelType.XGBOOST:
+        params = {
+            'learning_rate': trial.suggest_float('learning_rate', 0.001, 0.5, log=True),
+            'n_estimators': trial.suggest_int('n_estimators', 10, 2000),
+            'max_depth': trial.suggest_int('max_depth', 1, 20),
+            'min_child_weight': trial.suggest_int('min_child_weight', 1, 20),
+            'subsample': trial.suggest_float('subsample', 0.1, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.1, 1.0),
+            'colsample_bylevel': trial.suggest_float('colsample_bylevel', 0.1, 1.0),
+            'colsample_bynode': trial.suggest_float('colsample_bynode', 0.1, 1.0),
+            'gamma': trial.suggest_float('gamma', 0, 10),
+            'scale_pos_weight': trial.suggest_float('scale_pos_weight', 0.01, 20),
+            'reg_alpha': trial.suggest_float('reg_alpha', 5, 1000, log=True),
+            'reg_lambda': trial.suggest_float('reg_lambda', 0, 1000),
+            'grow_policy': trial.suggest_categorical('grow_policy', ['depthwise', 'lossguide']),
+        }
+    else:
+        params = {
+            'C': trial.suggest_float('C', 1e-5, 100, log=True),
+            'fit_intercept': trial.suggest_categorical('fit_intercept', [True, False]),
+            'solver': trial.suggest_categorical('solver', ['liblinear', 'saga']),
+            'tol': trial.suggest_float('tol', 1e-4, 1e-1, log=True),
+        }
     for prev_trial in trial.study.trials:
         if prev_trial.state in OPTUNA_STATE_CHECKED and prev_trial.params == trial.params:
             raise optuna.TrialPruned()
@@ -144,27 +165,31 @@ def get_optuna_optimized_params(study_name, dataset, args):
         objective = partial(run_optuna_search, dataset=dataset, args=deepcopy(args))
         study.optimize(func=objective, callbacks=callbacks)
 
-    processes = []
-    for i in range(args.optuna_n_workers - 1):
-        p = Process(target=run_optuna_worker)
-        p.start()
-        processes.append(p)
-        time.sleep(1)
+    if not args.not_optimize:
+        processes = []
+        for i in range(args.optuna_n_workers - 1):
+            p = Process(target=run_optuna_worker)
+            p.start()
+            processes.append(p)
+            time.sleep(1)
 
-    run_optuna_worker()
+        run_optuna_worker()
 
-    for p in processes:
-        p.join()
+        for p in processes:
+            p.join()
 
-    num_trials = len(study.get_trials(deepcopy=False, states=OPTUNA_STATE_CHECKED))
-    return study.best_trial.params, num_trials
+    study_stats = {
+        "best_trial_no": study.best_trial.number,
+        "num_trials": len(study.get_trials(deepcopy=False, states=OPTUNA_STATE_CHECKED)),
+    }
+    return study.best_trial.params, study_stats
 
 
 def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args):
     study_name = args.study_name + f"_f{fold_num}"
     start_time = time.time()
 
-    best_params, num_trials = get_optuna_optimized_params(study_name, temp_dataset, args)
+    best_params, study_stats = get_optuna_optimized_params(study_name, temp_dataset, args)
     logger.info(f"Got best params for '{study_name}': {dict(best_params)}")
 
     x_train, y_train = temp_dataset
@@ -183,20 +208,29 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
         summary["r2_score"] = r2_score(y_test, y_proba)
 
     summary.update({
-        **best_params,
         "timestamp": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-        "elapsed_time": time.time() - start_time,
         "fold_num": fold_num,
-        "num_trials": num_trials,
+        **study_stats,
+        "elapsed_time": time.time() - start_time,
         **args.__dict__,
-        "feat_importance": pd.Series(model.feature_importances_, index=x_train.columns).to_dict(),
+        **best_params,
         "y_test": y_test.tolist(),
         "y_proba": y_proba.tolist(),
     })
 
+    if args.model == ModelType.XGBOOST:
+        feat_values = model.feature_importances_
+    elif args.model == ModelType.LOGISTICREGRESSION:
+        feat_values = model.coef_[0]
+    summary["feat_importance"] = dict(zip(x_train.columns, feat_values))
+
     sh_dict[fold_num] = summary
-    logger.info(f"Fold completed '{study_name}', " + f"auc_score: {summary['auc_score']:.4f}" if
-                args.exp_type == ExpType.CLS else f"r2_score: {summary['r2_score']:.4f}")
+    logger.info(
+        f"Fold completed '{study_name}', " + (
+            f"auc_score: {summary['auc_score']:.4f}"
+            if args.exp_type == ExpType.CLS else f"r2_score: {summary['r2_score']:.4f}"
+        )
+    )
 
 
 def execute_outer_cross_validation_loop(x, y, args):
@@ -220,25 +254,32 @@ def execute_outer_cross_validation_loop(x, y, args):
     return experiment_results
 
 
-def get_data(args):
-    if args.nan_handling == NanHandlingType.REMOVE:
-        ol_df, cov_df = load_datasets(cols_na_th=0.3, rows_na_th=0.3)
-    elif args.nan_handling == NanHandlingType.IGNORE:
-        ol_df, cov_df = load_datasets(cols_na_th=0, rows_na_th=0)
-
+@memory.cache
+def get_olink_and_covariates(nan_th, corr_th):
+    ol_df, cov_df = load_datasets(cols_na_th=nan_th, rows_na_th=nan_th)
     # 0 - NTN, 1 - HTN no meds, 2 - HTN meds (we consider only 0 and 1 in the experiment)
     cov_df = cov_df.loc[cov_df.HTNgroup < 2]
     ol_df = ol_df.loc[cov_df.index]
 
-    if args.corr_handling == CorrHandlingType.DROP:
+    if corr_th not in (0, 1):
         ol_df_corr = ol_df.corr()
         mask = np.triu(np.ones(ol_df_corr.shape), k=1).astype(bool)
         high_corr = ol_df_corr.where(mask)
-        cols_to_remove = [column for column in high_corr.columns if any(high_corr[column] > 0.9)]
+        cols_to_remove = [column for column in high_corr.columns if
+                          any(high_corr[column] > corr_th)]
         ol_df.drop(columns=cols_to_remove, inplace=True)
+
+    return ol_df, cov_df
+
+
+def get_data(args):
+    ol_df, cov_df = get_olink_and_covariates(args.nan_th, args.corr_th)
 
     if args.target == TargetType.PP2:
         cov_df["PP2"] = (cov_df["SBP"] - cov_df["DBP"]) / (cov_df["SBP"] + cov_df["DBP"]) * 2
+
+    x = ol_df
+    y = cov_df[args.target].values
 
     if args.exp_type == ExpType.CLS:
         lower_bound, upper_bound = cov_df[args.target].quantile(
@@ -277,23 +318,49 @@ def get_data(args):
         high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[args.target]]
         x = ol_df.loc[chosen_cov_df.index]
         y = chosen_cov_df.index.isin(high_cov_df.index)
-    else:
-        x = ol_df
-        y = cov_df[args.target].values
+
+    if args.panel != PanelType.WHOLE:
+        olink_assays = pd.read_csv(DATA_DIR / "olink-explore-3072-assay-list-2023-06-08.csv")
+        olink_assays["Explore 384 panel"] = olink_assays.loc[:, "Explore 384 panel"].apply(
+            lambda x: x.split("_")[0].lower())
+        assays_mapping = olink_assays.groupby("Explore 384 panel")["Gene name"].apply(set).to_dict()
+        x = x.loc[:, x.columns.isin(assays_mapping[args.panel])]
+
+    if args.model == ModelType.LOGISTICREGRESSION:
+        x.fillna(x.median(), inplace=True)
+        x = (x - x.mean()) / x.std()
+
+    if args.interactions:
+        feat_importances_dir = DATA_DIR / "feat_importances"
+        feat_imps = pd.read_csv(feat_importances_dir / f"{args.study_name}.csv")
+        most_imp_feats = feat_imps.sort_values("importance", ascending=False)[
+                         :args.interactions].feature
+        inter_combs = list(combinations(most_imp_feats, 2))
+        new_feats = pd.concat(
+            [x[feat1] * x[feat2] for feat1, feat2 in inter_combs], axis=1)
+        new_feats.columns = [f"{feat1}*{feat2}" for feat1, feat2 in inter_combs]
+        x = pd.concat([x, new_feats], axis=1)
 
     return x, y
 
 
 def run_experiment(args):
-    args.study_name = "two_extremes_exp_{}_th{}_nan_{}_corr_{}_s{}".format(
-        args.target.lower(), args.threshold, args.nan_handling, args.corr_handling, args.seed
+    args.study_name = "two_extremes_exp_{}_th{}_nan{}_corr{}_s{}".format(
+        args.target.lower(), args.threshold, args.nan_th, args.corr_th, args.seed
     )
+    if args.model == ModelType.LOGISTICREGRESSION:
+        args.study_name += "_lr"
+    if args.panel != PanelType.WHOLE:
+        args.study_name += f"_{args.panel.lower()[:5]}"
     if args.exp_type == ExpType.REG:
         args.study_name += "_reg"
-    logger.info(f"Study started: '{args.study_name}'")
+    study_name = (
+        args.study_name + f"_inter{args.interactions}" if args.interactions else args.study_name)
+    logger.info(f"Study started: '{study_name}'")
 
     x, y = get_data(args)
     logger.info(f"Data loaded, x: {x.shape}, y: {y.shape}")
+    args.study_name = study_name
 
     experiment_results = execute_outer_cross_validation_loop(x, y, args)
 
@@ -311,13 +378,17 @@ def run_experiment(args):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--model', type=str, default=ModelType.XGBOOST, choices=ModelType.ALL)
     parser.add_argument('--exp_type', type=str, default=ExpType.CLS, choices=ExpType.ALL)
-    parser.add_argument('--threshold', type=float, default=0.35)
     parser.add_argument('--target', type=str, default=TargetType.SBP, choices=TargetType.ALL)
-    parser.add_argument('--nan_handling', type=str, default=NanHandlingType.REMOVE,
-                        choices=NanHandlingType.ALL)
-    parser.add_argument('--corr_handling', type=str, default=CorrHandlingType.IGNORE,
-                        choices=CorrHandlingType.ALL)
+    parser.add_argument('--panel', type=str, default=PanelType.WHOLE, choices=PanelType.ALL)
+    parser.add_argument('--threshold', type=float, default=0.35)
+    parser.add_argument('--nan_th', type=float, default=0.3,
+                        help="threshold for maximal NaN ratio, everything above is removed")
+    parser.add_argument('--corr_th', type=float, default=0.9,
+                        help="threshold for maximal correlation, columns that correlate stronger are removed,"
+                             "0 or 1 means do not remove anything")
+    parser.add_argument('--interactions', type=int, default=0)
     parser.add_argument('--outer_splits', type=int, default=2, metavar='N',
                         help="number of outer splits of dataset")
     parser.add_argument('--inner_splits', type=int, default=2, metavar='N',
@@ -325,6 +396,8 @@ def main():
                              "score Optuna bases on")
     parser.add_argument('--n_trials', type=int, default=5, metavar='N',
                         help="number of trials for Optuna")
+    parser.add_argument('--not_optimize', action='store_true',
+                        help="do not optimize hyperparameters")
     parser.add_argument('-w', '--optuna_n_workers', type=int, default=1, metavar='N',
                         help="number of workers for Optuna")
     parser.add_argument('--num_gpus', type=int, default=1, metavar='N')
