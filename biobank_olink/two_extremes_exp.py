@@ -22,9 +22,9 @@ from optuna.storages import JournalStorage, JournalFileStorage
 from optuna.trial import TrialState
 from scipy.spatial.distance import squareform, pdist
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score, r2_score
+from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold
-from xgboost import XGBClassifier, XGBRegressor
+from xgboost import XGBClassifier
 
 from biobank_olink.dataset import load_datasets
 from biobank_olink.utils import get_color_logger
@@ -39,12 +39,6 @@ OPTUNA_STATE_CHECKED = (TrialState.PRUNED, TrialState.COMPLETE)
 logger = get_color_logger()
 
 memory = Memory("cache", verbose=0)
-
-
-class ExpType:
-    CLS = "cls"
-    REG = "reg"
-    ALL = (CLS, REG)
 
 
 class ModelType:
@@ -82,13 +76,10 @@ def get_model(params, args):
         proc_num = int(outer_process) * args.outer_splits + int(inner_process)
         gpu_id = proc_num % args.num_gpus
 
-        xgboost_cls = XGBClassifier if args.exp_type == ExpType.CLS else XGBRegressor
-        return xgboost_cls(tree_method="gpu_hist", gpu_id=gpu_id, random_state=args.seed,
-                           **params)
+        return XGBClassifier(tree_method="gpu_hist", gpu_id=gpu_id, random_state=args.seed,
+                             **params)
     elif args.model == ModelType.LOGISTICREGRESSION:
-        if args.exp_type == ExpType.REG:
-            raise ValueError("Logistic regression is not supported for regression tasks.")
-        return LogisticRegression(max_iter=10_000, penalty="l1", random_state=args.seed, **params)
+        return LogisticRegression(max_iter=10_000, penalty=None, random_state=args.seed, **params)
 
 
 def cross_validation_loop(dataset, model_params, args, trial):
@@ -102,12 +93,8 @@ def cross_validation_loop(dataset, model_params, args, trial):
 
         model = get_model(model_params, args)
         model.fit(train_x, train_y)
-        if args.exp_type == ExpType.CLS:
-            y_proba = model.predict_proba(test_x)[:, 1]
-            score = roc_auc_score(test_y, y_proba)
-        else:
-            y_pred = model.predict(test_x)
-            score = r2_score(test_y, y_pred)
+        y_proba = model.predict_proba(test_x)[:, 1]
+        score = roc_auc_score(test_y, y_proba)
 
         trial.report(score, i)
         if trial.should_prune():
@@ -137,9 +124,8 @@ def run_optuna_search(trial: optuna.Trial, dataset, args):
         }
     else:
         params = {
-            'C': trial.suggest_float('C', 1e-5, 100, log=True),
             'fit_intercept': trial.suggest_categorical('fit_intercept', [True, False]),
-            'solver': trial.suggest_categorical('solver', ['liblinear', 'saga']),
+            'solver': trial.suggest_categorical('solver', ['lbfgs', 'newton-cg', 'saga']),
             'tol': trial.suggest_float('tol', 1e-4, 1e-1, log=True),
         }
     for prev_trial in trial.study.trials:
@@ -187,7 +173,6 @@ def get_optuna_optimized_params(study_name, dataset, args):
 
 def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args):
     study_name = args.study_name + f"_f{fold_num}"
-    start_time = time.time()
 
     best_params, study_stats = get_optuna_optimized_params(study_name, temp_dataset, args)
     logger.info(f"Got best params for '{study_name}': {dict(best_params)}")
@@ -198,39 +183,29 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
     model = get_model(best_params, args)
     model.fit(x_train, y_train)
 
-    summary = {}
-    if args.exp_type == ExpType.CLS:
-        y_proba = model.predict_proba(x_test)[:, 1]
-        auc_score = roc_auc_score(y_test, y_proba)
-        summary["auc_score"] = auc_score
-    else:
-        y_proba = model.predict(x_test)
-        summary["r2_score"] = r2_score(y_test, y_proba)
+    y_proba = model.predict_proba(x_test)[:, 1]
+    auc_score = roc_auc_score(y_test, y_proba)
 
-    summary.update({
+    summary = {
+        "auc_score": auc_score,
         "timestamp": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
         "fold_num": fold_num,
         **study_stats,
-        "elapsed_time": time.time() - start_time,
         **args.__dict__,
         **best_params,
         "y_test": y_test.tolist(),
         "y_proba": y_proba.tolist(),
-    })
+    }
 
     if args.model == ModelType.XGBOOST:
         feat_values = model.feature_importances_
     elif args.model == ModelType.LOGISTICREGRESSION:
-        feat_values = model.coef_[0]
+        feat_values = np.abs(model.coef_[0])
+        feat_values = feat_values / np.sum(feat_values)
     summary["feat_importance"] = dict(zip(x_train.columns, feat_values))
 
     sh_dict[fold_num] = summary
-    logger.info(
-        f"Fold completed '{study_name}', " + (
-            f"auc_score: {summary['auc_score']:.4f}"
-            if args.exp_type == ExpType.CLS else f"r2_score: {summary['r2_score']:.4f}"
-        )
-    )
+    logger.info(f"Fold completed - '{study_name}', auc_score: {summary['auc_score']:.4f}")
 
 
 def execute_outer_cross_validation_loop(x, y, args):
@@ -278,46 +253,42 @@ def get_data(args):
     if args.target == TargetType.PP2:
         cov_df["PP2"] = (cov_df["SBP"] - cov_df["DBP"]) / (cov_df["SBP"] + cov_df["DBP"]) * 2
 
-    x = ol_df
-    y = cov_df[args.target].values
+    lower_bound, upper_bound = cov_df[args.target].quantile(
+        [args.threshold, 1 - args.threshold]).values
+    low_cov_df = cov_df[cov_df[args.target] < lower_bound]
+    high_cov_df = cov_df[upper_bound < cov_df[args.target]]
 
-    if args.exp_type == ExpType.CLS:
-        lower_bound, upper_bound = cov_df[args.target].quantile(
-            [args.threshold, 1 - args.threshold]).values
-        low_cov_df = cov_df[cov_df[args.target] < lower_bound]
-        high_cov_df = cov_df[upper_bound < cov_df[args.target]]
+    correction_df = pd.concat([low_cov_df, high_cov_df])
+    correction_cols = ["Sex", "age", "BMI"]
+    correction_df = correction_df[correction_cols]
+    correction_df = (correction_df - correction_df.mean()) / correction_df.std()
 
-        correction_df = pd.concat([low_cov_df, high_cov_df])
-        correction_cols = ["Sex", "age", "BMI"]
-        correction_df = correction_df[correction_cols]
-        correction_df = (correction_df - correction_df.mean()) / correction_df.std()
+    similarities = squareform(pdist(correction_df, metric="euclidean"))
+    np.fill_diagonal(similarities, np.inf)
+    similarities_df = pd.DataFrame(similarities, index=correction_df.index,
+                                   columns=correction_df.index)
+    del similarities
+    similarities_sub_df = similarities_df.loc[low_cov_df.index, high_cov_df.index]
 
-        similarities = squareform(pdist(correction_df, metric="euclidean"))
-        np.fill_diagonal(similarities, np.inf)
-        similarities_df = pd.DataFrame(similarities, index=correction_df.index,
-                                       columns=correction_df.index)
-        del similarities
-        similarities_sub_df = similarities_df.loc[low_cov_df.index, high_cov_df.index]
+    paired_up_df = similarities_sub_df.idxmin().to_frame("p2_id")
+    paired_up_df["dist"] = similarities_df.min()
+    paired_up_df2 = similarities_sub_df.T.idxmin().to_frame("p2_id")
+    paired_up_df2["dist"] = similarities_df.T.min()
+    del similarities_df
+    paired_up_df = pd.concat([paired_up_df, paired_up_df2])
+    paired_up_df.sort_values(by="dist", inplace=True)
 
-        paired_up_df = similarities_sub_df.idxmin().to_frame("p2_id")
-        paired_up_df["dist"] = similarities_df.min()
-        paired_up_df2 = similarities_sub_df.T.idxmin().to_frame("p2_id")
-        paired_up_df2["dist"] = similarities_df.T.min()
-        del similarities_df
-        paired_up_df = pd.concat([paired_up_df, paired_up_df2])
-        paired_up_df.sort_values(by="dist", inplace=True)
+    chosen = set()
+    for p1_idx, (p2_idx, _) in paired_up_df.iterrows():
+        if p1_idx in chosen or p2_idx in chosen:
+            continue
+        chosen.add(p1_idx)
+        chosen.add(p2_idx)
 
-        chosen = set()
-        for p1_idx, (p2_idx, _) in paired_up_df.iterrows():
-            if p1_idx in chosen or p2_idx in chosen:
-                continue
-            chosen.add(p1_idx)
-            chosen.add(p2_idx)
-
-        chosen_cov_df = cov_df.loc[list(chosen)]
-        high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[args.target]]
-        x = ol_df.loc[chosen_cov_df.index]
-        y = chosen_cov_df.index.isin(high_cov_df.index)
+    chosen_cov_df = cov_df.loc[list(chosen)]
+    high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[args.target]]
+    x = ol_df.loc[chosen_cov_df.index]
+    y = chosen_cov_df.index.isin(high_cov_df.index)
 
     if args.panel != PanelType.WHOLE:
         olink_assays = pd.read_csv(DATA_DIR / "olink-explore-3072-assay-list-2023-06-08.csv")
@@ -326,9 +297,12 @@ def get_data(args):
         assays_mapping = olink_assays.groupby("Explore 384 panel")["Gene name"].apply(set).to_dict()
         x = x.loc[:, x.columns.isin(assays_mapping[args.panel])]
 
-    if args.model == ModelType.LOGISTICREGRESSION:
-        x.fillna(x.median(), inplace=True)
-        x = (x - x.mean()) / x.std()
+    if args.n_best_feats:
+        standard_x = (x - x.mean()) / x.std()
+        is_high = standard_x.index.isin(high_cov_df.index)
+        ol_mean_diffs = (standard_x.loc[is_high].mean() - standard_x.loc[~is_high].mean()).abs()
+        best_feats = ol_mean_diffs.sort_values(ascending=False)[:args.n_best_feats].index
+        x = x.loc[:, best_feats]
 
     if args.interactions:
         feat_importances_dir = DATA_DIR / "feat_importances"
@@ -341,6 +315,10 @@ def get_data(args):
         new_feats.columns = [f"{feat1}*{feat2}" for feat1, feat2 in inter_combs]
         x = pd.concat([x, new_feats], axis=1)
 
+    if args.model == ModelType.LOGISTICREGRESSION:
+        x.fillna(x.median(), inplace=True)
+        x = (x - x.mean()) / x.std()
+
     return x, y
 
 
@@ -352,8 +330,8 @@ def run_experiment(args):
         args.study_name += "_lr"
     if args.panel != PanelType.WHOLE:
         args.study_name += f"_{args.panel.lower()[:5]}"
-    if args.exp_type == ExpType.REG:
-        args.study_name += "_reg"
+    if args.n_best_feats:
+        args.study_name += f"_best{args.n_best_feats}"
     study_name = (
         args.study_name + f"_inter{args.interactions}" if args.interactions else args.study_name)
     logger.info(f"Study started: '{study_name}'")
@@ -379,7 +357,6 @@ def run_experiment(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default=ModelType.XGBOOST, choices=ModelType.ALL)
-    parser.add_argument('--exp_type', type=str, default=ExpType.CLS, choices=ExpType.ALL)
     parser.add_argument('--target', type=str, default=TargetType.SBP, choices=TargetType.ALL)
     parser.add_argument('--panel', type=str, default=PanelType.WHOLE, choices=PanelType.ALL)
     parser.add_argument('--threshold', type=float, default=0.35)
@@ -389,6 +366,7 @@ def main():
                         help="threshold for maximal correlation, columns that correlate stronger are removed,"
                              "0 or 1 means do not remove anything")
     parser.add_argument('--interactions', type=int, default=0)
+    parser.add_argument('--n_best_feats', type=int, default=0)
     parser.add_argument('--outer_splits', type=int, default=2, metavar='N',
                         help="number of outer splits of dataset")
     parser.add_argument('--inner_splits', type=int, default=2, metavar='N',
