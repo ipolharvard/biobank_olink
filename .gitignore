@@ -5,6 +5,8 @@ figures/**.pdf
 figures/*.png
 **/data
 
+cache
+
 ### JupyterNotebooks template
 # gitignore template for Jupyter Notebooks
 # website: http://jupyter.org/
