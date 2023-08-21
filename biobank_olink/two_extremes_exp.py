@@ -15,7 +15,6 @@ from multiprocessing import Process, current_process, Manager
 import numpy as np
 import optuna
 import pandas as pd
-from joblib import Memory
 from optuna._callbacks import MaxTrialsCallback
 from optuna.exceptions import ExperimentalWarning
 from optuna.storages import JournalStorage, JournalFileStorage
@@ -26,7 +25,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold
 from xgboost import XGBClassifier
 
-from biobank_olink.dataset import load_datasets
+from biobank_olink.dataset import load_olink_and_covariates
 from biobank_olink.utils import get_color_logger
 
 warnings.filterwarnings("ignore", category=ExperimentalWarning)
@@ -38,8 +37,6 @@ OPTUNA_STATE_CHECKED = (TrialState.PRUNED, TrialState.COMPLETE)
 
 logger = get_color_logger()
 
-memory = Memory("cache", verbose=0)
-
 
 class ModelType:
     XGBOOST = "xgb"
@@ -48,10 +45,10 @@ class ModelType:
 
 
 class TargetType:
-    SBP = "SBP"
-    DBP = "DBP"
-    PP = "PP"
-    PP2 = "PP2"
+    SBP = "sbp"
+    DBP = "dbp"
+    PP = "pp"
+    PP2 = "pp2"
     ALL = (SBP, DBP, PP, PP2)
 
 
@@ -229,34 +226,22 @@ def execute_outer_cross_validation_loop(x, y, args):
     return experiment_results
 
 
-@memory.cache
-def get_olink_and_covariates(nan_th, corr_th):
-    ol_df, cov_df = load_datasets(cols_na_th=nan_th, rows_na_th=nan_th)
+def get_data(args):
+    ol_df, cov_df = load_olink_and_covariates(args.nan_th, args.corr_th, args.corr_th)
     # 0 - NTN, 1 - HTN no meds, 2 - HTN meds (we consider only 0 and 1 in the experiment)
     cov_df = cov_df.loc[cov_df.HTNgroup < 2]
     ol_df = ol_df.loc[cov_df.index]
 
-    if corr_th not in (0, 1):
-        ol_df_corr = ol_df.corr()
-        mask = np.triu(np.ones(ol_df_corr.shape), k=1).astype(bool)
-        high_corr = ol_df_corr.where(mask)
-        cols_to_remove = [column for column in high_corr.columns if
-                          any(high_corr[column] > corr_th)]
-        ol_df.drop(columns=cols_to_remove, inplace=True)
-
-    return ol_df, cov_df
-
-
-def get_data(args):
-    ol_df, cov_df = get_olink_and_covariates(args.nan_th, args.corr_th)
-
     if args.target == TargetType.PP2:
         cov_df["PP2"] = (cov_df["SBP"] - cov_df["DBP"]) / (cov_df["SBP"] + cov_df["DBP"]) * 2
 
-    lower_bound, upper_bound = cov_df[args.target].quantile(
+    target = args.target.upper()
+    lower_bound, upper_bound = cov_df[target].quantile(
         [args.threshold, 1 - args.threshold]).values
-    low_cov_df = cov_df[cov_df[args.target] < lower_bound]
-    high_cov_df = cov_df[upper_bound < cov_df[args.target]]
+
+    is_high_group = upper_bound < cov_df[target]
+    high_cov_df = cov_df[is_high_group]
+    low_cov_df = cov_df[~is_high_group]
 
     correction_df = pd.concat([low_cov_df, high_cov_df])
     correction_cols = ["Sex", "age", "BMI"]
@@ -286,7 +271,7 @@ def get_data(args):
         chosen.add(p2_idx)
 
     chosen_cov_df = cov_df.loc[list(chosen)]
-    high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[args.target]]
+    high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[target]]
     x = ol_df.loc[chosen_cov_df.index]
     y = chosen_cov_df.index.isin(high_cov_df.index)
 
@@ -323,9 +308,10 @@ def get_data(args):
 
 
 def run_experiment(args):
-    args.study_name = "two_extremes_exp_{}_th{}_nan{}_corr{}_s{}".format(
-        args.target.lower(), args.threshold, args.nan_th, args.corr_th, args.seed
-    )
+    args.study_name = "two_extremes_exp_{}_th{}_nan{}".format(
+        args.target.lower(), args.threshold, args.nan_th)
+    if args.corr_th is not None:
+        args.study_name += f"_corr{args.corr_th}"
     if args.model == ModelType.LOGISTICREGRESSION:
         args.study_name += "_lr"
     if args.panel != PanelType.WHOLE:
@@ -362,9 +348,9 @@ def main():
     parser.add_argument('--threshold', type=float, default=0.35)
     parser.add_argument('--nan_th', type=float, default=0.3,
                         help="threshold for maximal NaN ratio, everything above is removed")
-    parser.add_argument('--corr_th', type=float, default=0.9,
-                        help="threshold for maximal correlation, columns that correlate stronger are removed,"
-                             "0 or 1 means do not remove anything")
+    parser.add_argument('--corr_th', type=float, default=None,
+                        help="threshold for maximal correlation, columns that correlate stronger"
+                             " are removed,'None' means do not remove anything")
     parser.add_argument('--interactions', type=int, default=0)
     parser.add_argument('--n_best_feats', type=int, default=0)
     parser.add_argument('--outer_splits', type=int, default=2, metavar='N',
