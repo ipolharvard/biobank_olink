@@ -11,7 +11,6 @@ from functools import partial
 from importlib.resources import files
 from itertools import combinations
 from multiprocessing import Process, current_process, Manager
-from typing import Optional
 
 import numpy as np
 import optuna
@@ -56,11 +55,11 @@ class TargetType:
 
 class PanelType:
     WHOLE = "all"
+    CARDIOMETABOLIC = "cardiometabolic"
     INFLAMMATION = "inflammation"
     NEUROLOGY = "neurology"
-    CARDIOMETABOLIC = "cardiometabolic"
     ONCOLOGY = "oncology"
-    ALL = (WHOLE, INFLAMMATION, NEUROLOGY, CARDIOMETABOLIC, ONCOLOGY)
+    ALL = (WHOLE, CARDIOMETABOLIC, INFLAMMATION, NEUROLOGY, ONCOLOGY)
 
 
 def get_model(params, args):
@@ -120,7 +119,7 @@ def run_optuna_search(trial: optuna.Trial, dataset, args):
             'reg_alpha': trial.suggest_float('reg_alpha', 0, 1000),
             'reg_lambda': trial.suggest_float('reg_lambda', 0, 1000),
             'grow_policy': trial.suggest_categorical('grow_policy', ['depthwise', 'lossguide']),
-            'max_bins': trial.suggest_int('max_bins', 2, 1024),
+            'max_bin': trial.suggest_int('max_bin', 2, 1024),
         }
     else:
         params = {
@@ -308,7 +307,7 @@ def get_data(args):
 
 
 def run_experiment(args):
-    args.study_name = "two_extremes_exp_{}_m{}_th{}_nan{}".format(
+    args.study_name = "two_extremes_{}_{}_th{}_nan{}".format(
         args.target, args.model, args.threshold, args.nan_th)
     if args.corr_th is not None:
         args.study_name += f"_corr{args.corr_th}"
@@ -345,13 +344,13 @@ def main():
     parser.add_argument('--target', type=str, default=TargetType.SBP, choices=TargetType.ALL)
     parser.add_argument('--panel', type=str, default=PanelType.WHOLE, choices=PanelType.ALL)
     parser.add_argument('--threshold', type=float, default=0.35)
-    parser.add_argument('--nan_th', type=Optional[float], default=0.3,
+    parser.add_argument('--nan_th', type=float, default=0.3,
                         help="threshold for maximal NaN ratio, everything above is removed")
-    parser.add_argument('--corr_th', type=Optional[float], default=None,
+    parser.add_argument('--corr_th', type=float, default=None,
                         help="threshold for maximal correlation, columns that correlate stronger"
                              " are removed,'None' means do not remove anything")
-    parser.add_argument('--interactions', type=Optional[int], default=None)
-    parser.add_argument('--n_best_feats', type=Optional[int], default=None)
+    parser.add_argument('--interactions', type=int, default=None)
+    parser.add_argument('--n_best_feats', type=int, default=None)
     parser.add_argument('--outer_splits', type=int, default=2, metavar='N',
                         help="number of outer splits of dataset (>1)")
     parser.add_argument('--inner_splits', type=int, default=2, metavar='N',
