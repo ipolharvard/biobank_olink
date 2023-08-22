@@ -1,11 +1,10 @@
 ### JetBrains
 
 .idea
-figures/**.pdf
-figures/*.png
 **/data
-
 cache
+optuna_db
+results
 
 ### JupyterNotebooks template
 # gitignore template for Jupyter Notebooks

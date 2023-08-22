@@ -11,6 +11,7 @@ from functools import partial
 from importlib.resources import files
 from itertools import combinations
 from multiprocessing import Process, current_process, Manager
+from typing import Optional
 
 import numpy as np
 import optuna
@@ -22,7 +23,7 @@ from optuna.trial import TrialState
 from scipy.spatial.distance import squareform, pdist
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedKFold
 from xgboost import XGBClassifier
 
 from biobank_olink.dataset import load_olink_and_covariates
@@ -31,8 +32,9 @@ from biobank_olink.utils import get_color_logger
 warnings.filterwarnings("ignore", category=ExperimentalWarning)
 
 DATA_DIR = files("biobank_olink.data")
-RESULTS_DIR = DATA_DIR / "results"
-OPTUNA_DB_DIR = DATA_DIR / "optuna_dbs"
+PROJECT_ROOT = DATA_DIR / "../.."
+RESULTS_DIR = PROJECT_ROOT / "results"
+OPTUNA_DB_DIR = PROJECT_ROOT / "optuna_dbs"
 OPTUNA_STATE_CHECKED = (TrialState.PRUNED, TrialState.COMPLETE)
 
 logger = get_color_logger()
@@ -80,11 +82,11 @@ def get_model(params, args):
 
 
 def cross_validation_loop(dataset, model_params, args, trial):
-    kf = KFold(n_splits=args.inner_splits, shuffle=True, random_state=args.seed)
+    skf = StratifiedKFold(n_splits=args.inner_splits, shuffle=True, random_state=args.seed)
     x, y = dataset
     intermediate_scores = []
 
-    for i, (train_index, test_index) in enumerate(kf.split(x)):
+    for i, (train_index, test_index) in enumerate(skf.split(x, y)):
         train_x, train_y = x.iloc[train_index], y[train_index]
         test_x, test_y = x.iloc[test_index], y[test_index]
 
@@ -106,7 +108,7 @@ def run_optuna_search(trial: optuna.Trial, dataset, args):
     if args.model == ModelType.XGBOOST:
         params = {
             'learning_rate': trial.suggest_float('learning_rate', 0.001, 0.5, log=True),
-            'n_estimators': trial.suggest_int('n_estimators', 10, 2000),
+            'n_estimators': trial.suggest_int('n_estimators', 50, 3000),
             'max_depth': trial.suggest_int('max_depth', 1, 20),
             'min_child_weight': trial.suggest_int('min_child_weight', 1, 20),
             'subsample': trial.suggest_float('subsample', 0.1, 1.0),
@@ -115,9 +117,10 @@ def run_optuna_search(trial: optuna.Trial, dataset, args):
             'colsample_bynode': trial.suggest_float('colsample_bynode', 0.1, 1.0),
             'gamma': trial.suggest_float('gamma', 0, 10),
             'scale_pos_weight': trial.suggest_float('scale_pos_weight', 0.01, 20),
-            'reg_alpha': trial.suggest_float('reg_alpha', 5, 1000, log=True),
+            'reg_alpha': trial.suggest_float('reg_alpha', 0, 1000),
             'reg_lambda': trial.suggest_float('reg_lambda', 0, 1000),
             'grow_policy': trial.suggest_categorical('grow_policy', ['depthwise', 'lossguide']),
+            'max_bins': trial.suggest_int('max_bins', 2, 1024),
         }
     else:
         params = {
@@ -148,7 +151,7 @@ def get_optuna_optimized_params(study_name, dataset, args):
         objective = partial(run_optuna_search, dataset=dataset, args=deepcopy(args))
         study.optimize(func=objective, callbacks=callbacks)
 
-    if not args.not_optimize:
+    if not args.no_opt:
         processes = []
         for i in range(args.optuna_n_workers - 1):
             p = Process(target=run_optuna_worker)
@@ -206,10 +209,10 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
 
 
 def execute_outer_cross_validation_loop(x, y, args):
-    kf = KFold(n_splits=args.outer_splits, shuffle=True, random_state=args.seed)
+    skf = StratifiedKFold(n_splits=args.outer_splits, shuffle=True, random_state=args.seed)
     processes, mgr = [], Manager()
     d = mgr.dict()
-    for fold_num, (train_index, test_index) in enumerate(kf.split(x)):
+    for fold_num, (train_index, test_index) in enumerate(skf.split(x, y)):
         temp_dataset = (x.iloc[train_index], y[train_index])
         test_dataset = (x.iloc[test_index], y[test_index])
 
@@ -227,7 +230,7 @@ def execute_outer_cross_validation_loop(x, y, args):
 
 
 def get_data(args):
-    ol_df, cov_df = load_olink_and_covariates(args.nan_th, args.corr_th, args.corr_th)
+    ol_df, cov_df = load_olink_and_covariates(args.nan_th, args.nan_th, args.corr_th)
     # 0 - NTN, 1 - HTN no meds, 2 - HTN meds (we consider only 0 and 1 in the experiment)
     cov_df = cov_df.loc[cov_df.HTNgroup < 2]
     ol_df = ol_df.loc[cov_df.index]
@@ -238,10 +241,8 @@ def get_data(args):
     target = args.target.upper()
     lower_bound, upper_bound = cov_df[target].quantile(
         [args.threshold, 1 - args.threshold]).values
-
-    is_high_group = upper_bound < cov_df[target]
-    high_cov_df = cov_df[is_high_group]
-    low_cov_df = cov_df[~is_high_group]
+    high_cov_df = cov_df[upper_bound < cov_df[target]]
+    low_cov_df = cov_df[cov_df[target] < lower_bound]
 
     correction_df = pd.concat([low_cov_df, high_cov_df])
     correction_cols = ["Sex", "age", "BMI"]
@@ -290,8 +291,7 @@ def get_data(args):
         x = x.loc[:, best_feats]
 
     if args.interactions:
-        feat_importances_dir = DATA_DIR / "feat_importances"
-        feat_imps = pd.read_csv(feat_importances_dir / f"{args.study_name}.csv")
+        feat_imps = pd.read_csv(DATA_DIR / "feat_importances" / f"{args.study_name}.csv")
         most_imp_feats = feat_imps.sort_values("importance", ascending=False)[
                          :args.interactions].feature
         inter_combs = list(combinations(most_imp_feats, 2))
@@ -308,18 +308,17 @@ def get_data(args):
 
 
 def run_experiment(args):
-    args.study_name = "two_extremes_exp_{}_th{}_nan{}".format(
-        args.target.lower(), args.threshold, args.nan_th)
+    args.study_name = "two_extremes_exp_{}_m{}_th{}_nan{}".format(
+        args.target, args.model, args.threshold, args.nan_th)
     if args.corr_th is not None:
         args.study_name += f"_corr{args.corr_th}"
-    if args.model == ModelType.LOGISTICREGRESSION:
-        args.study_name += "_lr"
     if args.panel != PanelType.WHOLE:
         args.study_name += f"_{args.panel.lower()[:5]}"
     if args.n_best_feats:
         args.study_name += f"_best{args.n_best_feats}"
     study_name = (
         args.study_name + f"_inter{args.interactions}" if args.interactions else args.study_name)
+    study_name += f"_s{args.seed}"
     logger.info(f"Study started: '{study_name}'")
 
     x, y = get_data(args)
@@ -346,22 +345,22 @@ def main():
     parser.add_argument('--target', type=str, default=TargetType.SBP, choices=TargetType.ALL)
     parser.add_argument('--panel', type=str, default=PanelType.WHOLE, choices=PanelType.ALL)
     parser.add_argument('--threshold', type=float, default=0.35)
-    parser.add_argument('--nan_th', type=float, default=0.3,
+    parser.add_argument('--nan_th', type=Optional[float], default=0.3,
                         help="threshold for maximal NaN ratio, everything above is removed")
-    parser.add_argument('--corr_th', type=float, default=None,
+    parser.add_argument('--corr_th', type=Optional[float], default=None,
                         help="threshold for maximal correlation, columns that correlate stronger"
                              " are removed,'None' means do not remove anything")
-    parser.add_argument('--interactions', type=int, default=0)
-    parser.add_argument('--n_best_feats', type=int, default=0)
+    parser.add_argument('--interactions', type=Optional[int], default=None)
+    parser.add_argument('--n_best_feats', type=Optional[int], default=None)
     parser.add_argument('--outer_splits', type=int, default=2, metavar='N',
-                        help="number of outer splits of dataset")
+                        help="number of outer splits of dataset (>1)")
     parser.add_argument('--inner_splits', type=int, default=2, metavar='N',
-                        help="number of inner splits in each outer split, and also this is the "
-                             "score Optuna bases on")
+                        help="number of inner splits in each outer split, "
+                             "the average score is Optuna's objective (>1)")
     parser.add_argument('--n_trials', type=int, default=5, metavar='N',
                         help="number of trials for Optuna")
-    parser.add_argument('--not_optimize', action='store_true',
-                        help="do not optimize hyperparameters")
+    parser.add_argument('--no_opt', action='store_true',
+                        help="do not optimize hyperparameters, evaluate best trials only")
     parser.add_argument('-w', '--optuna_n_workers', type=int, default=1, metavar='N',
                         help="number of workers for Optuna")
     parser.add_argument('--num_gpus', type=int, default=1, metavar='N')
