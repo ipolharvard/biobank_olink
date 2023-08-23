@@ -18,14 +18,15 @@ dependencies = [
     "shap",
     "xgboost",
     "numba==0.56.4",
-    "optuna"
+    "optuna",
+    "click"
 ]
 
 [project.optional-dependencies]
 all = ["jupyter"]
 
 [project.scripts]
-two-extremes-exp = "biobank_olink.two_extremes_exp:main"
+biobank_olink = "biobank_olink.cli:run_cli"
 
 [build-system]
 requires = ["setuptools", "wheel"]

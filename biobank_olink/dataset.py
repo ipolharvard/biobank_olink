@@ -1,10 +1,8 @@
-from importlib.resources import files
-
 import numpy as np
 import pandas as pd
 from joblib import Memory
 
-DATA_DIR = files("biobank_olink.data")
+from biobank_olink.constants import DATA_DIR
 
 memory = Memory(DATA_DIR / "../../cache", verbose=2)
 

@@ -1,14 +1,12 @@
 """
-The whole experiment is defined in this file. It is a bit long, but it is not that complicated.
+Contains the base code for the experiment that is invoked by the CLI. Check commands dir for more
+info.
 """
-import argparse
-import json
 import time
 import warnings
 from copy import deepcopy
 from datetime import datetime
 from functools import partial
-from importlib.resources import files
 from itertools import combinations
 from multiprocessing import Process, current_process, Manager
 
@@ -16,50 +14,19 @@ import numpy as np
 import optuna
 import pandas as pd
 from optuna._callbacks import MaxTrialsCallback
-from optuna.exceptions import ExperimentalWarning
 from optuna.storages import JournalStorage, JournalFileStorage
-from optuna.trial import TrialState
 from scipy.spatial.distance import squareform, pdist
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 from xgboost import XGBClassifier
 
+from biobank_olink.constants import DATA_DIR
 from biobank_olink.dataset import load_olink_and_covariates
-from biobank_olink.utils import get_color_logger
+from biobank_olink.exp_two_extremes.constants import ModelType, OPTUNA_DB_DIR, OPTUNA_STATE_CHECKED, \
+    PanelType, TargetType, logger
 
-warnings.filterwarnings("ignore", category=ExperimentalWarning)
-
-DATA_DIR = files("biobank_olink.data")
-PROJECT_ROOT = DATA_DIR / "../.."
-RESULTS_DIR = PROJECT_ROOT / "results"
-OPTUNA_DB_DIR = PROJECT_ROOT / "optuna_dbs"
-OPTUNA_STATE_CHECKED = (TrialState.PRUNED, TrialState.COMPLETE)
-
-logger = get_color_logger()
-
-
-class ModelType:
-    XGBOOST = "xgb"
-    LOGISTICREGRESSION = "lr"
-    ALL = (XGBOOST, LOGISTICREGRESSION)
-
-
-class TargetType:
-    SBP = "sbp"
-    DBP = "dbp"
-    PP = "pp"
-    PP2 = "pp2"
-    ALL = (SBP, DBP, PP, PP2)
-
-
-class PanelType:
-    WHOLE = "all"
-    CARDIOMETABOLIC = "cardiometabolic"
-    INFLAMMATION = "inflammation"
-    NEUROLOGY = "neurology"
-    ONCOLOGY = "oncology"
-    ALL = (WHOLE, CARDIOMETABOLIC, INFLAMMATION, NEUROLOGY, ONCOLOGY)
+warnings.filterwarnings("ignore")
 
 
 def get_model(params, args):
@@ -77,7 +44,7 @@ def get_model(params, args):
         return XGBClassifier(tree_method="gpu_hist", gpu_id=gpu_id, random_state=args.seed,
                              **params)
     elif args.model == ModelType.LOGISTICREGRESSION:
-        return LogisticRegression(max_iter=10_000, penalty=None, random_state=args.seed, **params)
+        return LogisticRegression(max_iter=10_000, random_state=args.seed, **params)
 
 
 def cross_validation_loop(dataset, model_params, args, trial):
@@ -124,9 +91,14 @@ def run_optuna_search(trial: optuna.Trial, dataset, args):
     else:
         params = {
             'fit_intercept': trial.suggest_categorical('fit_intercept', [True, False]),
-            'solver': trial.suggest_categorical('solver', ['lbfgs', 'newton-cg', 'saga']),
             'tol': trial.suggest_float('tol', 1e-4, 1e-1, log=True),
+            'penalty': trial.suggest_categorical('penalty', ['l1', 'l2', 'elasticnet', None]),
+            'solver': 'saga'
         }
+        if params["penalty"] == "elasticnet":
+            params["l1_ratio"] = trial.suggest_float('l1_ratio', 0, 1)
+        if params["penalty"] is not None:
+            params["C"] = trial.suggest_float('C', 1e-4, 1000, log=True)
     for prev_trial in trial.study.trials:
         if prev_trial.state in OPTUNA_STATE_CHECKED and prev_trial.params == trial.params:
             raise optuna.TrialPruned()
@@ -156,7 +128,8 @@ def get_optuna_optimized_params(study_name, dataset, args):
             p = Process(target=run_optuna_worker)
             p.start()
             processes.append(p)
-            time.sleep(1)
+            # prevent workers from accessing the same db file at the beginning
+            time.sleep(3)
 
         run_optuna_worker()
 
@@ -201,7 +174,9 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
     elif args.model == ModelType.LOGISTICREGRESSION:
         feat_values = np.abs(model.coef_[0])
         feat_values = feat_values / np.sum(feat_values)
-    summary["feat_importance"] = dict(zip(x_train.columns, feat_values))
+    else:
+        raise ValueError(f"Unknown model type: {args.model}")
+    summary["feat_importance"] = dict(zip(x_train.columns, feat_values.tolist()))
 
     sh_dict[fold_num] = summary
     logger.info(f"Fold completed - '{study_name}', auc_score: {summary['auc_score']:.4f}")
@@ -304,70 +279,3 @@ def get_data(args):
         x = (x - x.mean()) / x.std()
 
     return x, y
-
-
-def run_experiment(args):
-    args.study_name = "two_extremes_{}_{}_th{}_nan{}".format(
-        args.target, args.model, args.threshold, args.nan_th)
-    if args.corr_th is not None:
-        args.study_name += f"_corr{args.corr_th}"
-    if args.panel != PanelType.WHOLE:
-        args.study_name += f"_{args.panel.lower()[:5]}"
-    if args.n_best_feats:
-        args.study_name += f"_best{args.n_best_feats}"
-    study_name = (
-        args.study_name + f"_inter{args.interactions}" if args.interactions else args.study_name)
-    study_name += f"_s{args.seed}"
-    logger.info(f"Study started: '{study_name}'")
-
-    x, y = get_data(args)
-    logger.info(f"Data loaded, x: {x.shape}, y: {y.shape}")
-    args.study_name = study_name
-
-    experiment_results = execute_outer_cross_validation_loop(x, y, args)
-
-    message = f"Completed the study '{args.study_name}'"
-    if len(experiment_results) != args.outer_splits:
-        logger.warning(message + f", {len(experiment_results)} out of {args.outer_splits} folds")
-    else:
-        logger.info(message)
-
-    RESULTS_DIR.mkdir(exist_ok=True)
-    with open(RESULTS_DIR / f"{args.study_name}.json", "w") as f:
-        json.dump(experiment_results, f, indent=4,
-                  default=lambda obj: obj.__name__ if hasattr(obj, "__name__") else "unknown")
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, default=ModelType.XGBOOST, choices=ModelType.ALL)
-    parser.add_argument('--target', type=str, default=TargetType.SBP, choices=TargetType.ALL)
-    parser.add_argument('--panel', type=str, default=PanelType.WHOLE, choices=PanelType.ALL)
-    parser.add_argument('--threshold', type=float, default=0.35)
-    parser.add_argument('--nan_th', type=float, default=0.3,
-                        help="threshold for maximal NaN ratio, everything above is removed")
-    parser.add_argument('--corr_th', type=float, default=None,
-                        help="threshold for maximal correlation, columns that correlate stronger"
-                             " are removed,'None' means do not remove anything")
-    parser.add_argument('--interactions', type=int, default=None)
-    parser.add_argument('--n_best_feats', type=int, default=None)
-    parser.add_argument('--outer_splits', type=int, default=2, metavar='N',
-                        help="number of outer splits of dataset (>1)")
-    parser.add_argument('--inner_splits', type=int, default=2, metavar='N',
-                        help="number of inner splits in each outer split, "
-                             "the average score is Optuna's objective (>1)")
-    parser.add_argument('--n_trials', type=int, default=5, metavar='N',
-                        help="number of trials for Optuna")
-    parser.add_argument('--no_opt', action='store_true',
-                        help="do not optimize hyperparameters, evaluate best trials only")
-    parser.add_argument('-w', '--optuna_n_workers', type=int, default=1, metavar='N',
-                        help="number of workers for Optuna")
-    parser.add_argument('--num_gpus', type=int, default=1, metavar='N')
-    parser.add_argument('--seed', type=int, default=42, metavar='N', help='random seed')
-
-    args = parser.parse_args()
-    run_experiment(args)
-
-
-if __name__ == '__main__':
-    main()

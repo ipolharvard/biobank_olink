@@ -5,6 +5,7 @@
 cache
 optuna_db
 results
+results_old
 
 ### JupyterNotebooks template
 # gitignore template for Jupyter Notebooks
