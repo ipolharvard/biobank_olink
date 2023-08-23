@@ -10,8 +10,8 @@ NUM_GPUS=8
 biobank_olink two-extremes \
     --model lr \
     --panel all \
-    --target dbp \
-    --interactions 100 \
+    --target pp \
+    --interactions 10 \
     --threshold 0.35 \
     --nan_th 0.3 \
     --corr_th 0.9 \

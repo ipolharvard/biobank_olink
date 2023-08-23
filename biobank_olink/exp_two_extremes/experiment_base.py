@@ -44,7 +44,7 @@ def get_model(params, args):
         return XGBClassifier(tree_method="gpu_hist", gpu_id=gpu_id, random_state=args.seed,
                              **params)
     elif args.model == ModelType.LOGISTICREGRESSION:
-        return LogisticRegression(max_iter=10_000, random_state=args.seed, **params)
+        return LogisticRegression(solver="saga", max_iter=10_000, random_state=args.seed, **params)
 
 
 def cross_validation_loop(dataset, model_params, args, trial):
@@ -93,7 +93,6 @@ def run_optuna_search(trial: optuna.Trial, dataset, args):
             'fit_intercept': trial.suggest_categorical('fit_intercept', [True, False]),
             'tol': trial.suggest_float('tol', 1e-4, 1e-1, log=True),
             'penalty': trial.suggest_categorical('penalty', ['l1', 'l2', 'elasticnet', None]),
-            'solver': 'saga'
         }
         if params["penalty"] == "elasticnet":
             params["l1_ratio"] = trial.suggest_float('l1_ratio', 0, 1)
