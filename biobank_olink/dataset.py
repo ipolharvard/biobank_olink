@@ -45,8 +45,9 @@ def load_olink_and_covariates(cols_na_th=0.3, rows_na_th=0.3, corr_th=None):
         ol_df_corr = ol_df.corr()
         mask = np.triu(np.ones(ol_df_corr.shape), k=1).astype(bool)
         high_corr = ol_df_corr.where(mask)
-        cols_to_remove = [column for column in high_corr.columns if
-                          any(high_corr[column] > corr_th)]
+        cols_to_remove = [
+            column for column in high_corr.columns if any(high_corr[column] > corr_th)
+        ]
         ol_df.drop(columns=cols_to_remove, inplace=True)
         print("Dropped columns due to Corr threshold: {}".format(len(cols_to_remove)))
 
@@ -60,6 +61,7 @@ def load_olink_and_covariates(cols_na_th=0.3, rows_na_th=0.3, corr_th=None):
 def get_olink_panel_mapping():
     olink_assays = pd.read_csv(DATA_DIR / "olink-explore-3072-assay-list-2023-06-08.csv")
     olink_assays["Explore 384 panel"] = olink_assays.loc[:, "Explore 384 panel"].apply(
-        lambda x: x.split("_")[0])
+        lambda x: x.split("_")[0]
+    )
     assays_mapping = olink_assays.groupby("Explore 384 panel")["Gene name"].apply(list).to_dict()
     return assays_mapping

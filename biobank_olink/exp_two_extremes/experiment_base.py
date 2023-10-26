@@ -23,8 +23,14 @@ from xgboost import XGBClassifier
 
 from biobank_olink.constants import DATA_DIR
 from biobank_olink.dataset import load_olink_and_covariates
-from biobank_olink.exp_two_extremes.constants import ModelType, OPTUNA_DB_DIR, OPTUNA_STATE_CHECKED, \
-    PanelType, TargetType, logger
+from biobank_olink.exp_two_extremes.constants import (
+    ModelType,
+    OPTUNA_DB_DIR,
+    OPTUNA_STATE_CHECKED,
+    PanelType,
+    TargetType,
+    logger,
+)
 
 warnings.filterwarnings("ignore")
 
@@ -41,8 +47,9 @@ def get_model(params, args):
         proc_num = int(outer_process) * args.outer_splits + int(inner_process)
         gpu_id = proc_num % args.num_gpus
 
-        return XGBClassifier(tree_method="gpu_hist", gpu_id=gpu_id, random_state=args.seed,
-                             **params)
+        return XGBClassifier(
+            tree_method="gpu_hist", gpu_id=gpu_id, random_state=args.seed, **params
+        )
     elif args.model == ModelType.LOGISTICREGRESSION:
         return LogisticRegression(solver="saga", max_iter=10_000, random_state=args.seed, **params)
 
@@ -73,31 +80,31 @@ def cross_validation_loop(dataset, model_params, args, trial):
 def run_optuna_search(trial: optuna.Trial, dataset, args):
     if args.model == ModelType.XGBOOST:
         params = {
-            'learning_rate': trial.suggest_float('learning_rate', 0.001, 0.5, log=True),
-            'n_estimators': trial.suggest_int('n_estimators', 50, 3000),
-            'max_depth': trial.suggest_int('max_depth', 1, 20),
-            'min_child_weight': trial.suggest_int('min_child_weight', 1, 20),
-            'subsample': trial.suggest_float('subsample', 0.1, 1.0),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.1, 1.0),
-            'colsample_bylevel': trial.suggest_float('colsample_bylevel', 0.1, 1.0),
-            'colsample_bynode': trial.suggest_float('colsample_bynode', 0.1, 1.0),
-            'gamma': trial.suggest_float('gamma', 0, 10),
-            'scale_pos_weight': trial.suggest_float('scale_pos_weight', 0.01, 20),
-            'reg_alpha': trial.suggest_float('reg_alpha', 0, 1000),
-            'reg_lambda': trial.suggest_float('reg_lambda', 0, 1000),
-            'grow_policy': trial.suggest_categorical('grow_policy', ['depthwise', 'lossguide']),
-            'max_bin': trial.suggest_int('max_bin', 2, 1024),
+            "learning_rate": trial.suggest_float("learning_rate", 0.001, 0.5, log=True),
+            "n_estimators": trial.suggest_int("n_estimators", 50, 3000),
+            "max_depth": trial.suggest_int("max_depth", 1, 20),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
+            "subsample": trial.suggest_float("subsample", 0.1, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.1, 1.0),
+            "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.1, 1.0),
+            "colsample_bynode": trial.suggest_float("colsample_bynode", 0.1, 1.0),
+            "gamma": trial.suggest_float("gamma", 0, 10),
+            "scale_pos_weight": trial.suggest_float("scale_pos_weight", 0.01, 20),
+            "reg_alpha": trial.suggest_float("reg_alpha", 0, 1000),
+            "reg_lambda": trial.suggest_float("reg_lambda", 0, 1000),
+            "grow_policy": trial.suggest_categorical("grow_policy", ["depthwise", "lossguide"]),
+            "max_bin": trial.suggest_int("max_bin", 2, 1024),
         }
     else:
         params = {
-            'fit_intercept': trial.suggest_categorical('fit_intercept', [True, False]),
-            'tol': trial.suggest_float('tol', 1e-4, 1e-1, log=True),
-            'penalty': trial.suggest_categorical('penalty', ['l1', 'l2', 'elasticnet', None]),
+            "fit_intercept": trial.suggest_categorical("fit_intercept", [True, False]),
+            "tol": trial.suggest_float("tol", 1e-4, 1e-1, log=True),
+            "penalty": trial.suggest_categorical("penalty", ["l1", "l2", "elasticnet", None]),
         }
         if params["penalty"] == "elasticnet":
-            params["l1_ratio"] = trial.suggest_float('l1_ratio', 0, 1)
+            params["l1_ratio"] = trial.suggest_float("l1_ratio", 0, 1)
         if params["penalty"] is not None:
-            params["C"] = trial.suggest_float('C', 1e-4, 1000, log=True)
+            params["C"] = trial.suggest_float("C", 1e-4, 1000, log=True)
     for prev_trial in trial.study.trials:
         if prev_trial.state in OPTUNA_STATE_CHECKED and prev_trial.params == trial.params:
             raise optuna.TrialPruned()
@@ -110,14 +117,17 @@ def get_optuna_optimized_params(study_name, dataset, args):
     storage = JournalStorage(JournalFileStorage(str(OPTUNA_DB_DIR / f"{study_name}.db")))
     callbacks = [MaxTrialsCallback(args.n_trials, states=OPTUNA_STATE_CHECKED)]
 
-    study = optuna.create_study(study_name=study_name, direction="maximize", storage=storage,
-                                load_if_exists=True)
+    study = optuna.create_study(
+        study_name=study_name, direction="maximize", storage=storage, load_if_exists=True
+    )
 
     def run_optuna_worker():
-        study = optuna.load_study(study_name=study_name, storage=storage,
-                                  sampler=optuna.samplers.TPESampler(seed=None),
-                                  pruner=optuna.pruners.MedianPruner(n_startup_trials=100,
-                                                                     n_warmup_steps=2))
+        study = optuna.load_study(
+            study_name=study_name,
+            storage=storage,
+            sampler=optuna.samplers.TPESampler(seed=None),
+            pruner=optuna.pruners.MedianPruner(n_startup_trials=100, n_warmup_steps=2),
+        )
         objective = partial(run_optuna_search, dataset=dataset, args=deepcopy(args))
         study.optimize(func=objective, callbacks=callbacks)
 
@@ -189,8 +199,9 @@ def execute_outer_cross_validation_loop(x, y, args):
         temp_dataset = (x.iloc[train_index], y[train_index])
         test_dataset = (x.iloc[test_index], y[test_index])
 
-        p = Process(target=one_fold_experiment_run,
-                    args=(d, temp_dataset, test_dataset, fold_num, args))
+        p = Process(
+            target=one_fold_experiment_run, args=(d, temp_dataset, test_dataset, fold_num, args)
+        )
         p.start()
         processes.append(p)
 
@@ -212,8 +223,7 @@ def get_data(args):
         cov_df["PP2"] = (cov_df["SBP"] - cov_df["DBP"]) / (cov_df["SBP"] + cov_df["DBP"]) * 2
 
     target = args.target.upper()
-    lower_bound, upper_bound = cov_df[target].quantile(
-        [args.threshold, 1 - args.threshold]).values
+    lower_bound, upper_bound = cov_df[target].quantile([args.threshold, 1 - args.threshold]).values
     high_cov_df = cov_df[upper_bound < cov_df[target]]
     low_cov_df = cov_df[cov_df[target] < lower_bound]
 
@@ -224,8 +234,9 @@ def get_data(args):
 
     similarities = squareform(pdist(correction_df, metric="euclidean"))
     np.fill_diagonal(similarities, np.inf)
-    similarities_df = pd.DataFrame(similarities, index=correction_df.index,
-                                   columns=correction_df.index)
+    similarities_df = pd.DataFrame(
+        similarities, index=correction_df.index, columns=correction_df.index
+    )
     del similarities
     similarities_sub_df = similarities_df.loc[low_cov_df.index, high_cov_df.index]
 
@@ -252,7 +263,8 @@ def get_data(args):
     if args.panel != PanelType.WHOLE:
         olink_assays = pd.read_csv(DATA_DIR / "olink-explore-3072-assay-list-2023-06-08.csv")
         olink_assays["Explore 384 panel"] = olink_assays.loc[:, "Explore 384 panel"].apply(
-            lambda x: x.split("_")[0].lower())
+            lambda x: x.split("_")[0].lower()
+        )
         assays_mapping = olink_assays.groupby("Explore 384 panel")["Gene name"].apply(set).to_dict()
         x = x.loc[:, x.columns.isin(assays_mapping[args.panel])]
 
@@ -260,16 +272,16 @@ def get_data(args):
         standard_x = (x - x.mean()) / x.std()
         is_high = standard_x.index.isin(high_cov_df.index)
         ol_mean_diffs = (standard_x.loc[is_high].mean() - standard_x.loc[~is_high].mean()).abs()
-        best_feats = ol_mean_diffs.sort_values(ascending=False)[:args.n_best_feats].index
+        best_feats = ol_mean_diffs.sort_values(ascending=False)[: args.n_best_feats].index
         x = x.loc[:, best_feats]
 
     if args.interactions:
         feat_imps = pd.read_csv(DATA_DIR / "feat_importances" / f"{args.study_name}.csv")
         most_imp_feats = feat_imps.sort_values("importance", ascending=False)[
-                         :args.interactions].feature
+            : args.interactions
+        ].feature
         inter_combs = list(combinations(most_imp_feats, 2))
-        new_feats = pd.concat(
-            [x[feat1] * x[feat2] for feat1, feat2 in inter_combs], axis=1)
+        new_feats = pd.concat([x[feat1] * x[feat2] for feat1, feat2 in inter_combs], axis=1)
         new_feats.columns = [f"{feat1}*{feat2}" for feat1, feat2 in inter_combs]
         x = pd.concat([x, new_feats], axis=1)
 
