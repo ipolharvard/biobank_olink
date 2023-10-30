@@ -5,19 +5,18 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=120
 
-NUM_GPUS=8
+NUM_GPUS="8"
 
 biobank_olink two-extremes \
-    --model lr \
+    --target sbp \
+    --model xgb \
     --panel all \
-    --target pp \
-    --interactions 10 \
     --threshold 0.35 \
-    --nan_th 0.3 \
+    --nan_th 0.6 \
     --corr_th 0.9 \
     --outer_splits 5 \
     --inner_splits 5 \
     --n_trials 200 \
-    --optuna_n_workers $NUM_GPUS \
-    --num_gpus $NUM_GPUS \
+    --optuna_n_workers ${NUM_GPUS} \
+    --num_gpus ${NUM_GPUS} \
     --seed 42

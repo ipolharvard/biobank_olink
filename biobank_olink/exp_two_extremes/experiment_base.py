@@ -21,8 +21,8 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 from xgboost import XGBClassifier
 
-from biobank_olink.constants import DATA_DIR
-from biobank_olink.dataset import load_olink_and_covariates
+from biobank_olink.constants import PROJECT_DATA
+from biobank_olink.dataset import load_olink_and_covariates, get_olink_panel_mapping
 from biobank_olink.exp_two_extremes.constants import (
     ModelType,
     OPTUNA_DB_DIR,
@@ -216,19 +216,16 @@ def execute_outer_cross_validation_loop(x, y, args):
 def get_data(args):
     ol_df, cov_df = load_olink_and_covariates(args.nan_th, args.nan_th, args.corr_th)
     # 0 - NTN, 1 - HTN no meds, 2 - HTN meds (we consider only 0 and 1 in the experiment)
-    cov_df = cov_df.loc[cov_df.HTNgroup < 2]
-    ol_df = ol_df.loc[cov_df.index]
+    cov_df = cov_df.loc[cov_df.HTNgroup < 2].copy()
+    ol_df = ol_df.loc[cov_df.index].copy()
 
-    if args.target == TargetType.PP2:
-        cov_df["PP2"] = (cov_df["SBP"] - cov_df["DBP"]) / (cov_df["SBP"] + cov_df["DBP"]) * 2
-
-    target = args.target.upper()
+    target = args.target
     lower_bound, upper_bound = cov_df[target].quantile([args.threshold, 1 - args.threshold]).values
-    high_cov_df = cov_df[upper_bound < cov_df[target]]
-    low_cov_df = cov_df[cov_df[target] < lower_bound]
+    high_cov_df = cov_df[upper_bound <= cov_df[target]]
+    low_cov_df = cov_df[cov_df[target] <= lower_bound]
 
     correction_df = pd.concat([low_cov_df, high_cov_df])
-    correction_cols = ["Sex", "age", "BMI"]
+    correction_cols = ["sex", "age", "bmi"]
     correction_df = correction_df[correction_cols]
     correction_df = (correction_df - correction_df.mean()) / correction_df.std()
 
@@ -237,7 +234,7 @@ def get_data(args):
     similarities_df = pd.DataFrame(
         similarities, index=correction_df.index, columns=correction_df.index
     )
-    del similarities
+    del similarities, correction_df
     similarities_sub_df = similarities_df.loc[low_cov_df.index, high_cov_df.index]
 
     paired_up_df = similarities_sub_df.idxmin().to_frame("p2_id")
@@ -261,11 +258,7 @@ def get_data(args):
     y = chosen_cov_df.index.isin(high_cov_df.index)
 
     if args.panel != PanelType.WHOLE:
-        olink_assays = pd.read_csv(DATA_DIR / "olink-explore-3072-assay-list-2023-06-08.csv")
-        olink_assays["Explore 384 panel"] = olink_assays.loc[:, "Explore 384 panel"].apply(
-            lambda x: x.split("_")[0].lower()
-        )
-        assays_mapping = olink_assays.groupby("Explore 384 panel")["Gene name"].apply(set).to_dict()
+        assays_mapping = get_olink_panel_mapping()
         x = x.loc[:, x.columns.isin(assays_mapping[args.panel])]
 
     if args.n_best_feats:
@@ -276,7 +269,7 @@ def get_data(args):
         x = x.loc[:, best_feats]
 
     if args.interactions:
-        feat_imps = pd.read_csv(DATA_DIR / "feat_importances" / f"{args.study_name}.csv")
+        feat_imps = pd.read_csv(PROJECT_DATA / "feat_importances" / f"{args.study_name}.csv")
         most_imp_feats = feat_imps.sort_values("importance", ascending=False)[
             : args.interactions
         ].feature

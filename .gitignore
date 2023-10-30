@@ -3,6 +3,7 @@
 .idea
 **/data
 cache
+figs
 optuna_db
 results
 results_old

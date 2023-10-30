@@ -2,66 +2,63 @@ import numpy as np
 import pandas as pd
 from joblib import Memory
 
-from biobank_olink.constants import DATA_DIR
+from biobank_olink.constants import PROJECT_DATA, PROJECT_ROOT
+from biobank_olink.exp_two_extremes.constants import logger
 
-memory = Memory(DATA_DIR / "../../cache", verbose=2)
+memory = Memory(PROJECT_ROOT / "cache", verbose=2)
 
 
 @memory.cache
-def load_olink_and_covariates(cols_na_th=0.3, rows_na_th=0.3, corr_th=None):
-    """
-    Load Olink data and covariates, and preprocess them.
-    :param cols_na_th: threshold for dropping columns with NaNs in OLINK
-    :param rows_na_th: threshold for dropping rows with NaNs in OLINK
-    :param corr_th: threshold for dropping columns with high correlation in OLINK
+def load_olink_and_covariates(cols_na_th=0.3, rows_na_th=0.3, corr_th=None) -> tuple[
+    pd.DataFrame, pd.DataFrame]:
+    """Load olink data and corresponding covariate features, and preprocess them.
+    :param cols_na_th: Threshold for dropping columns with NaNs in olink.
+    :param rows_na_th: Threshold for dropping rows with NaNs in olink.
+    :param corr_th: Threshold for dropping columns with high correlation in olink.
     :return: ol_df: Olink data (pd.DataFrame), cov_df: covariates (pd.DataFrame)
     """
-    cov_df = pd.read_csv(DATA_DIR / "BP_cov.zip", sep="\t", index_col="eid")
-    ol_df = pd.read_csv(DATA_DIR / "olink_data_ins0.csv", index_col=0)
+    ol_df = pd.read_csv(PROJECT_DATA / "olink_data_ext_ins0.csv.gz", index_col="eid")
 
-    def replace_comma_with_dot_if_str(x):
-        return x.replace(",", ".") if isinstance(x, str) else x
-
-    cols = ["BMI", "SBP", "DBP", "PP"]
-    cov_df[cols] = cov_df[cols].applymap(replace_comma_with_dot_if_str)
-    cov_df.replace(" ", np.nan, inplace=True)
-    cov_df = cov_df.astype(float)
-    cov_df = cov_df.loc[~(cov_df.BMI.isna() | cov_df.SBP.isna())]
-    cov_df.loc[cov_df.HTNgroup == 4, "HTNgroup"] = np.nan
-
-    if cols_na_th:
-        col_null_fracs = ol_df.isnull().sum().sort_values(ascending=False) / ol_df.shape[0]
-        cols_to_drop = col_null_fracs.loc[col_null_fracs > cols_na_th].index.values
-        print("Dropped columns due to NaN threshold: {}".format(len(cols_to_drop)))
-        ol_df.drop(columns=cols_to_drop, inplace=True)
-
-    if rows_na_th:
-        row_null_fracs = ol_df.isnull().sum(axis=1).sort_values(ascending=False) / ol_df.shape[1]
-        rows_to_drop = row_null_fracs.loc[row_null_fracs > rows_na_th].index.values
-        print("Dropped rows due to NaN threshold: {}".format(len(rows_to_drop)))
-        ol_df.drop(index=rows_to_drop, inplace=True)
-
-    if corr_th is not None:
-        ol_df_corr = ol_df.corr()
+    if corr_th:
+        ol_df_corr = compute_correlations_in_df(ol_df, ol_df.shape)
         mask = np.triu(np.ones(ol_df_corr.shape), k=1).astype(bool)
         high_corr = ol_df_corr.where(mask)
         cols_to_remove = [
             column for column in high_corr.columns if any(high_corr[column] > corr_th)
         ]
         ol_df.drop(columns=cols_to_remove, inplace=True)
-        print("Dropped columns due to Corr threshold: {}".format(len(cols_to_remove)))
+        logger.info("Dropped columns due to corr threshold: {}".format(len(cols_to_remove)))
 
+    if cols_na_th:
+        col_null_fracs = ol_df.isnull().sum(axis=0) / ol_df.shape[0]
+        cols_to_drop = col_null_fracs.loc[col_null_fracs > cols_na_th].index
+        ol_df.drop(columns=cols_to_drop, inplace=True)
+        logger.info(f"Dropped columns due to NaN threshold: {len(cols_to_drop):,}")
+
+    if rows_na_th:
+        row_null_fracs = ol_df.isnull().sum(axis=1) / ol_df.shape[1]
+        rows_to_drop = row_null_fracs.loc[row_null_fracs > rows_na_th].index
+        ol_df.drop(index=rows_to_drop, inplace=True)
+        logger.info(f"Dropped rows due to NaN threshold: {len(rows_to_drop):,}")
+
+    cov_df = pd.read_csv(PROJECT_DATA / "ukb_caucasian_cov.csv.gz", index_col="eid")
+    cov_df = cov_df.loc[~cov_df[["sbp", "bmi", "HTNgroup"]].isna().any(axis=1)].copy()
+    cov_df["HTNgroup"] = cov_df.HTNgroup.astype(np.int64)
     common_index = cov_df.index.intersection(ol_df.index)
-    cov_df = cov_df.loc[common_index]
-    ol_df = ol_df.loc[common_index]
-
+    ol_df, cov_df = ol_df.loc[common_index].copy(), cov_df.loc[common_index].copy()
     return ol_df, cov_df
 
 
+@memory.cache(ignore=["df"])
+def compute_correlations_in_df(df, shape):
+    """Shape is used for hashing purposes of the cache."""
+    return df.corr()
+
+
 def get_olink_panel_mapping():
-    olink_assays = pd.read_csv(DATA_DIR / "olink-explore-3072-assay-list-2023-06-08.csv")
-    olink_assays["Explore 384 panel"] = olink_assays.loc[:, "Explore 384 panel"].apply(
-        lambda x: x.split("_")[0]
+    olink_assays = pd.read_csv(PROJECT_DATA / "olink-explore-3072-assay-list-2023-06-08.csv")
+    olink_assays["Explore 384 panel"] = olink_assays.loc[:, "Explore 384 panel"].map(
+        lambda x: x.split("_")[0].lower()
     )
     assays_mapping = olink_assays.groupby("Explore 384 panel")["Gene name"].apply(list).to_dict()
     return assays_mapping
