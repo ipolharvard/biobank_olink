@@ -13,6 +13,7 @@ from multiprocessing import Process, current_process, Manager
 import numpy as np
 import optuna
 import pandas as pd
+import shap
 from optuna._callbacks import MaxTrialsCallback
 from optuna.storages import JournalStorage, JournalFileStorage
 from scipy.spatial.distance import squareform, pdist
@@ -28,7 +29,6 @@ from biobank_olink.exp_two_extremes.constants import (
     OPTUNA_DB_DIR,
     OPTUNA_STATE_CHECKED,
     PanelType,
-    TargetType,
     logger,
 )
 
@@ -81,7 +81,7 @@ def run_optuna_search(trial: optuna.Trial, dataset, args):
     if args.model == ModelType.XGBOOST:
         params = {
             "learning_rate": trial.suggest_float("learning_rate", 0.001, 0.5, log=True),
-            "n_estimators": trial.suggest_int("n_estimators", 50, 3000),
+            "n_estimators": trial.suggest_int("n_estimators", 50, 5000),
             "max_depth": trial.suggest_int("max_depth", 1, 20),
             "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
             "subsample": trial.suggest_float("subsample", 0.1, 1.0),
@@ -180,6 +180,9 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
 
     if args.model == ModelType.XGBOOST:
         feat_values = model.feature_importances_
+        shap_values = shap.TreeExplainer(model)(x_test)
+        shap_sum = np.abs(shap_values.values).sum(axis=0).tolist()
+        summary["shap_importance"] = dict(zip(x_test.columns, shap_sum))
     elif args.model == ModelType.LOGISTICREGRESSION:
         feat_values = np.abs(model.coef_[0])
         feat_values = feat_values / np.sum(feat_values)
