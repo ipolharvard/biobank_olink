@@ -114,7 +114,7 @@ def two_extremes(
             experiment_results,
             f,
             indent=4,
-            default=lambda obj: obj.__name__ if hasattr(obj, "__name__") else "unknown",
+            default=lambda obj: obj.name if hasattr(obj, "name") else "unknown",
         )
 
 
