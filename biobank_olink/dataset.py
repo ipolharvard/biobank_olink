@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 from joblib import Memory
 
-from biobank_olink.constants import PROJECT_DATA, PROJECT_ROOT
-from biobank_olink.exp_two_extremes.constants import logger
+from .constants import PROJECT_DATA, PROJECT_ROOT
+from .exp_two_extremes.constants import logger
 
 memory = Memory(PROJECT_ROOT / "cache", verbose=2)
 

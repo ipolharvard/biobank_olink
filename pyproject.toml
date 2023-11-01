@@ -19,7 +19,9 @@ dependencies = [
     "xgboost",
     "numba==0.56.4",
     "optuna",
-    "click"
+    "click",
+    "torch",
+    "torchtuples"
 ]
 
 [project.optional-dependencies]

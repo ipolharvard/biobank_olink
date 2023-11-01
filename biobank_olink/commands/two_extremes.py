@@ -1,59 +1,54 @@
 import json
 from types import SimpleNamespace
+from typing import Optional
 
 from click import command, option, Choice
 
-from biobank_olink.exp_two_extremes.constants import (
-    TargetType,
-    PanelType,
-    RESULTS_DIR,
-    ModelType,
-    logger,
-)
-from biobank_olink.exp_two_extremes.experiment_base import (
-    execute_outer_cross_validation_loop,
-    get_data,
-)
+from biobank_olink.exp_two_extremes import run_two_extremes_experiment, get_data
+from biobank_olink.exp_two_extremes.constants import RESULTS_DIR, logger, Target, Model, Panel
 
 
 @command
-@option("--target", type=Choice(TargetType.ALL))
-@option("--model", default=ModelType.XGBOOST, type=Choice(ModelType.ALL))
-@option("--panel", default=PanelType.WHOLE, type=Choice(PanelType.ALL))
+@option("--target", type=Choice([t.value for t in Target]))
+@option("--model", type=Choice([m.value for m in Model]))
+@option("--panel", default=Panel.ALL.value, show_default=True,
+        type=Choice([p.value for p in Panel]))
 @option(
     "--threshold",
     type=float,
     default=0.35,
+    show_default=True,
     help="Upper and lower percentiles to create the two extremes of the target variable.",
 )
 @option(
     "--nan_th",
     type=float,
-    default=0.3,
-    help="threshold for maximal NaN ratio, everything above is removed",
+    help="Threshold of the maximal NaN ratio, columns and rows above this level are discarded.",
 )
 @option(
     "--corr_th",
     type=float,
-    default=None,
-    help="threshold for maximal correlation, columns that correlate stronger"
-         " are removed,'None' means do not remove anything",
+    help="Threshold of the maximal correlation, columns that correlate stronger are discarded.",
 )
-@option("--interactions", type=int, default=None)
-@option("--n_best_feats", type=int, default=None)
 @option(
     "--outer_splits",
     type=int,
     default=2,
-    help="number of outer splits of dataset (>1)",
+    show_default=True,
+    metavar="N",
+    help="The number of outer splits of dataset (>1).",
 )
 @option(
     "--inner_splits",
     type=int,
     default=2,
-    help="number of inner splits in each outer split, the average score is Optuna's objective (>1)"
+    show_default=True,
+    metavar="N",
+    help="The number of inner splits in each outer split, the average score is used as Optuna "
+         "objective (>1)."
 )
-@option("--n_trials", type=int, default=5, metavar="N", help="number of trials for Optuna")
+@option("--n_trials", type=int, default=5, metavar="N", show_default=True,
+        help="The number of Optuna trials.")
 @option(
     "--no_opt",
     is_flag=True,
@@ -65,42 +60,73 @@ from biobank_olink.exp_two_extremes.experiment_base import (
     "--optuna_n_workers",
     type=int,
     default=1,
-    help="number of workers for Optuna",
+    metavar="N",
+    show_default=True,
+    help="The number of Optuna workers.",
 )
-@option("--num_gpus", type=int, default=1, help="Number of GPUs to use.")
-@option("--seed", type=int, default=42, help="Seed to use for RNG.")
-def two_extremes(**kwargs):
-    args = SimpleNamespace(**kwargs)
-    args.study_name = "two_extremes_{}_{}_th{}".format(args.target, args.model, args.threshold)
-    if args.nan_th:
-        args.study_name += f"_nan{args.nan_th}"
-    if args.corr_th:
-        args.study_name += f"_corr{args.corr_th}"
-    if args.panel != PanelType.WHOLE:
-        args.study_name += f"_{args.panel.lower()[:5]}"
-    if args.n_best_feats:
-        args.study_name += f"_best{args.n_best_feats}"
-    args.study_name += f"_s{args.seed}"
-    study_name = (
-        args.study_name + f"_inter{args.interactions}" if args.interactions else args.study_name
-    )
+@option("--num_gpus", type=int, default=1, metavar="N", show_default=True,
+        help="The number of GPUs to use.")
+def two_extremes(
+        target: str,
+        model: str,
+        panel: str,
+        threshold: float,
+        nan_th: Optional[float],
+        corr_th: Optional[float],
+        **exp_kwargs
+):
+    target = Target(target)
+    model = Model(model)
+    panel = Panel(panel)
+
+    study_name = get_study_name(target, model, panel, threshold, nan_th, corr_th)
     logger.info(f"Study started: '{study_name}'")
 
-    x, y = get_data(args)
+    x, y = get_data(target, model, panel, threshold, nan_th, corr_th)
     logger.info(f"Data loaded x: {x.shape}, y: {y.shape}")
-    args.study_name = study_name
-    experiment_results = execute_outer_cross_validation_loop(x, y, args)
 
-    message = f"Completed the study '{args.study_name}'"
-    if len(experiment_results) != args.outer_splits:
-        logger.warning(message + f", {len(experiment_results)} out of {args.outer_splits} folds")
+    exp_props = SimpleNamespace(
+        study_name=study_name,
+        target=target,
+        model=model,
+        panel=panel,
+        threshold=threshold,
+        nan_th=nan_th,
+        corr_th=corr_th,
+        **exp_kwargs
+    )
+    experiment_results = run_two_extremes_experiment(x, y, exp_props)
+
+    message = f"Completed the study '{study_name}'"
+    if len(experiment_results) != exp_props.outer_splits:
+        logger.warning(
+            message + f", {len(experiment_results)} out of {exp_props.outer_splits} folds")
     else:
         logger.info(message)
+
     RESULTS_DIR.mkdir(exist_ok=True)
-    with open(RESULTS_DIR / f"{args.study_name}.json", "w") as f:
+    with open(RESULTS_DIR / f"{study_name}.json", "w") as f:
         json.dump(
             experiment_results,
             f,
             indent=4,
             default=lambda obj: obj.__name__ if hasattr(obj, "__name__") else "unknown",
         )
+
+
+def get_study_name(
+        target: Target,
+        model: Model,
+        panel: Panel,
+        threshold: float,
+        nan_th: Optional[float] = None,
+        corr_th: Optional[float] = None,
+):
+    study_name = "two_extremes_{}_{}_th{}".format(target.value, model.value, threshold)
+    if nan_th:
+        study_name += f"_nan{nan_th}"
+    if corr_th:
+        study_name += f"_corr{corr_th}"
+    if panel != Panel.ALL:
+        study_name += f"_{panel.value.lower()[:5]}"
+    return study_name

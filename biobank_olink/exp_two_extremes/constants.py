@@ -1,34 +1,35 @@
+from enum import Enum
+
 from optuna.trial import TrialState
 
-from biobank_olink.constants import PROJECT_ROOT
-from biobank_olink.utils import get_color_logger
+from ..constants import PROJECT_ROOT, PROJECT_DATA
+from ..utils import get_color_logger
 
 
-class ModelType:
+class Model(Enum):
     XGBOOST = "xgb"
-    LOGISTICREGRESSION = "lr"
-    ALL = (XGBOOST, LOGISTICREGRESSION)
+    LOG_REG = "lr"
+    TRANSFORMER = "tfr"
 
 
-class TargetType:
+class Target(Enum):
     SBP = "sbp"
     DBP = "dbp"
     PP = "pp"
-    PP2 = "pp2"
-    ALL = (SBP, DBP, PP, PP2)
 
 
-class PanelType:
-    WHOLE = "all"
+class Panel(Enum):
+    ALL = "all"
     CARDIOMETABOLIC = "cardiometabolic"
     INFLAMMATION = "inflammation"
     NEUROLOGY = "neurology"
     ONCOLOGY = "oncology"
-    ALL = (WHOLE, CARDIOMETABOLIC, INFLAMMATION, NEUROLOGY, ONCOLOGY)
 
 
 RESULTS_DIR = PROJECT_ROOT / "results"
 OPTUNA_DB_DIR = PROJECT_ROOT / "optuna_dbs"
 OPTUNA_STATE_CHECKED = (TrialState.PRUNED, TrialState.COMPLETE)
 
-logger = get_color_logger("two_extreme_experiment")
+FEAT_IMP_DIR = PROJECT_DATA / "feat_importances"
+
+logger = get_color_logger()
