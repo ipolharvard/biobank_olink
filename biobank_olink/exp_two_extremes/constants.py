@@ -3,7 +3,6 @@ from enum import Enum
 from optuna.trial import TrialState
 
 from ..constants import PROJECT_ROOT, PROJECT_DATA
-from ..utils import get_color_logger
 
 
 class Model(Enum):
@@ -31,5 +30,3 @@ OPTUNA_DB_DIR = PROJECT_ROOT / "optuna_dbs"
 OPTUNA_STATE_CHECKED = (TrialState.PRUNED, TrialState.COMPLETE)
 
 FEAT_IMP_DIR = PROJECT_DATA / "feat_importances"
-
-logger = get_color_logger()

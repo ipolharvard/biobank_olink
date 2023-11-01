@@ -4,8 +4,12 @@ from typing import Optional
 
 from click import command, option, Choice
 
+from biobank_olink.constants import SEED
 from biobank_olink.exp_two_extremes import run_two_extremes_experiment, get_data
-from biobank_olink.exp_two_extremes.constants import RESULTS_DIR, logger, Target, Model, Panel
+from biobank_olink.exp_two_extremes.constants import RESULTS_DIR, Target, Model, Panel
+from biobank_olink.utils import get_logger
+
+logger = get_logger()
 
 
 @command
@@ -129,4 +133,4 @@ def get_study_name(
         study_name += f"_corr{corr_th}"
     if panel != Panel.ALL:
         study_name += f"_{panel.value.lower()[:5]}"
-    return study_name
+    return study_name + f"_s{SEED}"

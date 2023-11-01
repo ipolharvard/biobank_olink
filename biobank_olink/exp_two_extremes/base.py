@@ -3,6 +3,7 @@ Contains the base code for the experiment that is invoked by the CLI. Check comm
 info.
 """
 import time
+import warnings
 from copy import deepcopy
 from datetime import datetime
 from functools import partial
@@ -18,9 +19,13 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 from xgboost import XGBClassifier
 
-from .constants import OPTUNA_DB_DIR, OPTUNA_STATE_CHECKED, logger, Model
+from .constants import OPTUNA_DB_DIR, OPTUNA_STATE_CHECKED, Model
 from ..constants import SEED
-from ..utils import get_gpu_id
+from ..utils import get_gpu_id, get_logger
+
+warnings.filterwarnings("ignore")
+
+logger = get_logger()
 
 
 def get_model_params(model: Model, trial: optuna.Trial):
@@ -60,7 +65,7 @@ def get_fitted_model(model_name: Model, params, dataset: tuple, num_gpus, outer_
     gpu_id = get_gpu_id(num_gpus, outer_splits)
     if model_name == Model.XGBOOST:
         model = XGBClassifier(
-            tree_method="gpu_hist", gpu_id=gpu_id, random_state=SEED, **params
+            tree_method="hist", device=f"cuda:{gpu_id}", random_state=SEED, **params
         )
     elif model_name == Model.LOG_REG:
         model = LogisticRegression(solver="saga", max_iter=10_000, random_state=SEED, **params)

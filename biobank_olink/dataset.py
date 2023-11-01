@@ -3,8 +3,9 @@ import pandas as pd
 from joblib import Memory
 
 from .constants import PROJECT_DATA, PROJECT_ROOT
-from .exp_two_extremes.constants import logger
+from .utils import get_logger
 
+logger = get_logger()
 memory = Memory(PROJECT_ROOT / "cache", verbose=2)
 
 
