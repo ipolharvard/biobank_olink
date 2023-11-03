@@ -55,7 +55,7 @@ def get_data(
     chosen_cov_df = cov_df.loc[list(chosen)]
     high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[target]]
     x = ol_df.loc[chosen_cov_df.index]
-    y = chosen_cov_df.index.isin(high_cov_df.index)
+    y = chosen_cov_df.index.isin(high_cov_df.index)[:, np.newaxis].astype(np.float32)
 
     if panel != Panel.ALL:
         assays_mapping = get_olink_panel_mapping()

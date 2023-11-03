@@ -47,6 +47,6 @@ def get_gpu_id(num_gpus: int, num_outer_processes: int):
         outer_process, inner_process = values
     else:
         outer_process, inner_process = values[0], 0
-    proc_num = int(outer_process) * num_outer_processes + int(inner_process)
+    proc_num = num_outer_processes * int(inner_process) + int(outer_process)
     gpu_id = proc_num % num_gpus
     return gpu_id

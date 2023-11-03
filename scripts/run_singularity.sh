@@ -2,7 +2,7 @@
 #SBATCH --job-name=ukb_olink
 #SBATCH --time=7-00:00:00
 #SBATCH --partition=defq
-#SBATCH --gres=gpu:8
+#SBATCH --gres=gpu:5
 #SBATCH --output=olink.log
 
 module load singularity

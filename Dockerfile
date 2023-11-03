@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
+FROM nvidia/cuda:12.2.2-devel-ubuntu22.04
 
 ENV TZ=America/Montreal
 ARG DEBIAN_FRONTEND=noninteractive
@@ -23,5 +23,6 @@ RUN apt update && apt install -y \
 COPY requirements.txt .
 # Install Python requirements using the compiled version of the requirements
 RUN pip install --no-cache-dir -U pip setuptools wheel && \
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 && \
     pip install -r requirements.txt && \
     rm requirements.txt

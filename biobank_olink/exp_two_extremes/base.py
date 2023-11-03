@@ -17,9 +17,13 @@ from optuna.storages import JournalStorage, JournalFileStorage
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
+from torch.cuda import OutOfMemoryError
+from torchtuples.callbacks import EarlyStopping
 from xgboost import XGBClassifier
 
-from .constants import OPTUNA_DB_DIR, OPTUNA_STATE_CHECKED, Model
+from .constants import OPTUNA_DB_DIR, OPTUNA_STATE_CHECKED, Model, MAX_OUTER_SPLITS, \
+    MAX_INNER_SPLITS
+from .transformer import get_transformer, Tokenizer
 from ..constants import SEED
 from ..utils import get_gpu_id, get_logger
 
@@ -57,36 +61,63 @@ def get_model_params(model: Model, trial: optuna.Trial):
         if params["penalty"] is not None:
             params["C"] = trial.suggest_float("C", 1e-4, 1000, log=True)
         return params
+    elif model == Model.TRANSFORMER:
+        return {
+            "epochs": trial.suggest_int("epochs", 5, 200),
+            "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-1, log=True),
+            "batch_size": trial.suggest_int("batch_size", 16, 256, 8),
+            "n_layer": trial.suggest_int("n_layer", 1, 6),
+            "n_embd": trial.suggest_int("n_embd", 32, 512, 16),
+            "n_head": trial.suggest_categorical("n_head", [1, 2, 4, 8, 16]),
+            "dropout": trial.suggest_float("dropout", 0.1, 0.5),
+            "vocab_size": trial.suggest_int("vocab_size", 11, 101),
+        }
     else:
         raise NotImplementedError()
 
 
-def get_fitted_model(model_name: Model, params, dataset: tuple, num_gpus, outer_splits):
-    gpu_id = get_gpu_id(num_gpus, outer_splits)
+def get_fitted_model(model_name: Model, params, dataset: tuple, gpu_id: int):
     if model_name == Model.XGBOOST:
         model = XGBClassifier(
             tree_method="hist", device=f"cuda:{gpu_id}", random_state=SEED, **params
         )
+        model.fit(*dataset)
     elif model_name == Model.LOG_REG:
         model = LogisticRegression(solver="saga", max_iter=10_000, random_state=SEED, **params)
+        model.fit(*dataset)
+    elif model_name == Model.TRANSFORMER:
+        model = get_transformer(**params, device=gpu_id)
+        model.fit(input=dataset, batch_size=params["batch_size"], epochs=params["epochs"],
+                  callbacks=[EarlyStopping(patience=5, checkpoint_model=False, load_best=False)])
     else:
         raise NotImplementedError()
-    model.fit(*dataset)
     return model
 
 
 def cross_validation_loop(dataset, model_params, args, trial):
-    skf = StratifiedKFold(n_splits=args.inner_splits, shuffle=True, random_state=SEED)
     x, y = dataset
+    splits = StratifiedKFold(n_splits=MAX_INNER_SPLITS, shuffle=True, random_state=SEED).split(x, y)
+    splits = list(splits)[: args.inner_splits]
     intermediate_scores = []
-    for i, (train_index, test_index) in enumerate(skf.split(x, y)):
-        train_x, train_y = x.iloc[train_index], y[train_index]
-        test_x, test_y = x.iloc[test_index], y[test_index]
+    for i, (train_index, test_index) in enumerate(splits):
+        x_train, y_train = x.iloc[train_index], y[train_index]
+        x_test, y_test = x.iloc[test_index], y[test_index]
 
-        model = get_fitted_model(args.model, model_params, dataset=(train_x, train_y),
-                                 num_gpus=args.num_gpus, outer_splits=args.outer_splits)
-        y_proba = model.predict_proba(test_x)[:, 1]
-        score = roc_auc_score(test_y, y_proba)
+        if args.model == Model.TRANSFORMER:
+            tokenizer = Tokenizer(n_bins=model_params["vocab_size"] - 1)
+            x_train = tokenizer.fit_transform(x_train).values
+            x_test = tokenizer.transform(x_test).values
+            model_params["in_feats"] = x_train.shape[1]
+
+        model = get_fitted_model(
+            args.model,
+            model_params,
+            dataset=(x_train, y_train),
+            gpu_id=get_gpu_id(args.num_gpus, args.outer_splits)
+        )
+
+        y_proba = model.predict_proba(x_test)[:, -1]
+        score = roc_auc_score(y_test, y_proba)
         intermediate_scores.append(score)
 
         trial.report(score, i)
@@ -101,7 +132,10 @@ def run_optuna_search(trial: optuna.Trial, dataset, args):
     for prev_trial in trial.study.trials:
         if prev_trial.state in OPTUNA_STATE_CHECKED and prev_trial.params == trial.params:
             raise optuna.TrialPruned()
-    return cross_validation_loop(dataset, params, args, trial)
+    try:
+        return cross_validation_loop(dataset, params, args, trial)
+    except OutOfMemoryError:
+        raise optuna.TrialPruned()
 
 
 def get_optuna_optimized_params(study_name, dataset, args):
@@ -147,10 +181,23 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
     study_name = args.study_name + f"_f{fold_num}"
     best_params, study_stats = get_optuna_optimized_params(study_name, temp_dataset, args)
     logger.info(f"Got best params for '{study_name}': {dict(best_params)}")
-    model = get_fitted_model(args.model, best_params, dataset=temp_dataset,
-                             num_gpus=args.num_gpus, outer_splits=args.outer_splits)
 
+    x_train, y_train = temp_dataset
     x_test, y_test = test_dataset
+
+    if args.model == Model.TRANSFORMER:
+        tokenizer = Tokenizer(n_bins=best_params["vocab_size"] - 1)
+        x_train = tokenizer.fit_transform(x_train).values
+        x_test = tokenizer.transform(x_test).values
+        best_params["in_feats"] = x_train.shape[1]
+
+    model = get_fitted_model(
+        args.model,
+        best_params,
+        dataset=(x_train, y_train),
+        gpu_id=get_gpu_id(args.num_gpus, args.outer_splits)
+    )
+
     y_proba = model.predict_proba(x_test)[:, -1]
 
     summary = {
@@ -169,12 +216,11 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
         shap_values = shap.TreeExplainer(model)(x_test)
         shap_sum = np.abs(shap_values.values).sum(axis=0).tolist()
         summary["shap_importance"] = dict(zip(x_test.columns, shap_sum))
+        summary["feat_importance"] = dict(zip(x_test.columns, feat_values.tolist()))
     elif args.model == Model.LOG_REG:
         feat_values = np.abs(model.coef_[0])
         feat_values = feat_values / np.sum(feat_values)
-    else:
-        raise NotImplementedError()
-    summary["feat_importance"] = dict(zip(x_test.columns, feat_values.tolist()))
+        summary["feat_importance"] = dict(zip(x_test.columns, feat_values.tolist()))
 
     sh_dict[fold_num] = summary
     logger.info(f"Fold completed - '{study_name}', auc_score: {summary['auc_score']:.4f}")
@@ -183,14 +229,15 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
 def run_two_extremes_experiment(x, y, exp_props):
     processes, mgr = [], Manager()
     d = mgr.dict()
-    skf = StratifiedKFold(n_splits=exp_props.outer_splits, shuffle=True, random_state=SEED)
-    for fold_num, (train_index, test_index) in enumerate(skf.split(x, y)):
+    splits = StratifiedKFold(n_splits=MAX_OUTER_SPLITS, shuffle=True, random_state=SEED).split(x, y)
+    splits = list(splits)[: exp_props.outer_splits]
+    for fold_num, (train_index, test_index) in enumerate(splits):
         temp_dataset = (x.iloc[train_index], y[train_index])
         test_dataset = (x.iloc[test_index], y[test_index])
 
         p = Process(
             target=one_fold_experiment_run,
-            args=(d, temp_dataset, test_dataset, fold_num, exp_props)
+            args=(d, temp_dataset, test_dataset, fold_num, exp_props),
         )
         p.start()
         processes.append(p)
