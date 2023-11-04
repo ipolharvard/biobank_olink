@@ -22,7 +22,7 @@ def get_data(
     target = target.value
     lower_bound, upper_bound = cov_df[target].quantile([threshold, 1 - threshold]).values
     high_cov_df = cov_df[upper_bound <= cov_df[target]]
-    low_cov_df = cov_df[cov_df[target] <= lower_bound]
+    low_cov_df = cov_df[cov_df[target] < lower_bound]
 
     correction_df = pd.concat([low_cov_df, high_cov_df])
     correction_cols = ["sex", "age", "bmi"]
@@ -55,7 +55,7 @@ def get_data(
     chosen_cov_df = cov_df.loc[list(chosen)]
     high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[target]]
     x = ol_df.loc[chosen_cov_df.index]
-    y = chosen_cov_df.index.isin(high_cov_df.index)[:, np.newaxis].astype(np.float32)
+    y = chosen_cov_df.index.isin(high_cov_df.index).reshape(-1, 1)
 
     if panel != Panel.ALL:
         assays_mapping = get_olink_panel_mapping()

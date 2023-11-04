@@ -68,12 +68,12 @@ def get_model_params(model: Model, trial: optuna.Trial):
             "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-2, log=True),
             "batch_size": trial.suggest_int("batch_size", 8, 64, 8),
             "n_layer": trial.suggest_int("n_layer", 1, 2),
-            "n_embd": trial.suggest_int("n_embd", 8, 256, 8),
-            "n_head": trial.suggest_categorical("n_head", [1, 2, 4, 8]),
+            "n_embd": trial.suggest_int("n_embd", 8, 128, 8),
+            "n_head": trial.suggest_categorical("n_head", [1, 2, 4]),
             "dropout": trial.suggest_float("dropout", 0, 0.5),
-            "vocab_size": trial.suggest_int("vocab_size", 11, 101),
+            "vocab_size": trial.suggest_int("vocab_size", 11, 201),
             "bias": trial.suggest_categorical("bias", [True, False]),
-            "d_ff": trial.suggest_int("d_ff", 8, 512, 8),
+            "d_ff": trial.suggest_int("d_ff", 8, 128, 8),
         }
     else:
         raise NotImplementedError()
@@ -90,8 +90,9 @@ def get_fitted_model(model_name: Model, params, dataset: tuple, gpu_id: int):
         model.fit(*dataset)
     elif model_name == Model.TRANSFORMER:
         model = get_transformer(**params, device=gpu_id)
-        model.fit(input=dataset, batch_size=params["batch_size"], epochs=params["epochs"],
-                  verbose=False, torch_ds_dl=True, shuffle=True,
+        x, y = dataset
+        model.fit(input=x, target=y.astype(np.float32), batch_size=params["batch_size"],
+                  epochs=params["epochs"], verbose=False, torch_ds_dl=True, shuffle=True,
                   callbacks=[EarlyStopping(patience=5, dataset="train")])
     else:
         raise NotImplementedError()
@@ -111,7 +112,6 @@ def cross_validation_loop(dataset, model_params, args, trial):
             tokenizer = Tokenizer(n_bins=model_params["vocab_size"] - 1)
             x_train = tokenizer.fit_transform(x_train).values
             x_test = tokenizer.transform(x_test).values
-            model_params["in_feats"] = x_train.shape[1]
 
         model = get_fitted_model(
             args.model,
@@ -119,7 +119,6 @@ def cross_validation_loop(dataset, model_params, args, trial):
             dataset=(x_train, y_train),
             gpu_id=get_gpu_id(args.num_gpus, args.outer_splits)
         )
-
         y_proba = model.predict_proba(x_test)[:, -1]
         score = roc_auc_score(y_test, y_proba)
         intermediate_scores.append(score)
@@ -196,7 +195,6 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
         tokenizer = Tokenizer(n_bins=best_params["vocab_size"] - 1)
         x_train = tokenizer.fit_transform(x_train).values
         x_test = tokenizer.transform(x_test).values
-        best_params["in_feats"] = x_train.shape[1]
 
     model = get_fitted_model(
         args.model,
@@ -204,7 +202,6 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
         dataset=(x_train, y_train),
         gpu_id=get_gpu_id(args.num_gpus, args.outer_splits)
     )
-
     y_proba = model.predict_proba(x_test)[:, -1]
 
     summary = {

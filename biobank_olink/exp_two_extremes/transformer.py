@@ -1,239 +1,82 @@
-import math
 from functools import partial
 from typing import Optional
 
-import torchtuples as tt
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import torchtuples as tt
 
 from biobank_olink.constants import SEED
 
 
-class FeedForwardBlock(nn.Module):
-    def __init__(self, n_embd: int, d_ff: int, dropout: float, bias: bool = True) -> None:
-        super().__init__()
-        self.linear_1 = nn.Linear(n_embd, d_ff, bias=bias)  # w1 and b1
-        self.gelu = nn.GELU()
-        self.dropout = nn.Dropout(dropout)
-        self.linear_2 = nn.Linear(d_ff, n_embd, bias=bias)  # w2 and b2
-
-    def forward(self, x):
-        # (batch, seq_len, n_embd) --> (batch, seq_len, d_ff) --> (batch, seq_len, n_embd)
-        x = self.linear_1(x)
-        x = self.gelu(x)
-        x = self.linear_2(x)
-        x = self.dropout(x)
-        return x
-
-
-class InputEmbeddings(nn.Module):
-    def __init__(self, n_embd: int, vocab_size: int) -> None:
-        super().__init__()
-        self.n_embd = n_embd
-        self.vocab_size = vocab_size
-        self.embedding = nn.Embedding(vocab_size, n_embd)
-
-    def forward(self, x):
-        # (batch, seq_len) --> (batch, seq_len, n_embd)
-        # Multiply by sqrt(n_embd) to scale the embeddings according to the paper
-        return self.embedding(x) * math.sqrt(self.n_embd)
-
-
 class PositionalEncoding(nn.Module):
-    def __init__(self, n_embd: int, seq_len: int, dropout: float) -> None:
-        super().__init__()
-        self.n_embd = n_embd
-        self.seq_len = seq_len
-        self.dropout = nn.Dropout(dropout)
-        # Create a matrix of shape (seq_len, n_embd)
-        pe = torch.zeros(seq_len, n_embd)
-        # Create a vector of shape (seq_len)
-        position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1)  # (seq_len, 1)
-        # Create a vector of shape (n_embd)
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(
-            torch.arange(0, n_embd, 2).float() * (-math.log(10000.0) / n_embd)
-        )  # (n_embd / 2)
-        # Apply sine to even indices
-        pe[:, 0::2] = torch.sin(position * div_term)  # sin(position * (10000 ** (2i / n_embd))
-        # Apply cosine to odd indices
-        pe[:, 1::2] = torch.cos(position * div_term)  # cos(position * (10000 ** (2i / n_embd))
-        # Add a batch dimension to the positional encoding
-        pe = pe.unsqueeze(0)  # (1, seq_len, n_embd)
-        # Register the positional encoding as a buffer
-        self.register_buffer("pe", pe)
+            torch.arange(0, d_model, 2).float() * (-torch.log(torch.tensor(10000.0)) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
 
     def forward(self, x):
-        x = x + self.pe.requires_grad_(False)  # (batch, seq_len, n_embd)
+        x = x + self.pe[:, :x.size(1)]
         return self.dropout(x)
-
-
-class ResidualConnection(nn.Module):
-    def __init__(self, features: int, dropout: float, bias: bool = True) -> None:
-        super().__init__()
-        self.dropout = nn.Dropout(dropout)
-        self.norm = nn.LayerNorm(features, bias=bias)
-
-    def forward(self, x, sublayer):
-        return x + self.dropout(sublayer(self.norm(x)))
-
-
-class MultiHeadAttentionBlock(nn.Module):
-    def __init__(self, n_embd: int, h: int, dropout: float) -> None:
-        super().__init__()
-        self.n_embd = n_embd  # Embedding vector size
-        self.h = h  # Number of heads
-        # Make sure n_embd is divisible by h
-        assert n_embd % h == 0, "n_embd is not divisible by h"
-        self.d_k = n_embd // h  # Dimension of vector seen by each head
-        self.w_q = nn.Linear(n_embd, n_embd, bias=False)  # Wq
-        self.w_k = nn.Linear(n_embd, n_embd, bias=False)  # Wk
-        self.w_v = nn.Linear(n_embd, n_embd, bias=False)  # Wv
-        self.w_o = nn.Linear(n_embd, n_embd, bias=False)  # Wo
-        self.dropout = dropout
-
-    def forward(self, q, k, v):
-        query = self.w_q(q)  # (batch, seq_len, n_embd) --> (batch, seq_len, n_embd)
-        key = self.w_k(k)  # (batch, seq_len, n_embd) --> (batch, seq_len, n_embd)
-        value = self.w_v(v)  # (batch, seq_len, n_embd) --> (batch, seq_len, n_embd)
-        # (batch, seq_len, n_embd) --> (batch, seq_len, h, d_k) --> (batch, h, seq_len, d_k)
-        query = query.view(query.shape[0], query.shape[1], self.h, self.d_k).transpose(1, 2)
-        key = key.view(key.shape[0], key.shape[1], self.h, self.d_k).transpose(1, 2)
-        value = value.view(value.shape[0], value.shape[1], self.h, self.d_k).transpose(1, 2)
-        # Calculate attention
-        x = torch.nn.functional.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            attn_mask=None,
-            dropout_p=self.dropout if self.training else 0,
-            is_causal=False,
-        )
-        # Combine all the heads together
-        # (batch, h, seq_len, d_k) --> (batch, seq_len, h, d_k) --> (batch, seq_len, n_embd)
-        x = x.transpose(1, 2).contiguous().view(x.shape[0], -1, self.h * self.d_k)
-        # Multiply by Wo
-        # (batch, seq_len, n_embd) --> (batch, seq_len, n_embd)
-        return self.w_o(x)
-
-
-class EncoderBlock(nn.Module):
-    def __init__(
-            self,
-            features: int,
-            self_attention_block: MultiHeadAttentionBlock,
-            feed_forward_block: FeedForwardBlock,
-            dropout: float,
-            bias: bool = True,
-    ) -> None:
-        super().__init__()
-        self.self_attention_block = self_attention_block
-        self.feed_forward_block = feed_forward_block
-        self.residual_connections = nn.ModuleList(
-            [ResidualConnection(features, dropout, bias=bias) for _ in range(2)]
-        )
-
-    def forward(self, x):
-        x = self.residual_connections[0](x, lambda x: self.self_attention_block(x, x, x))
-        x = self.residual_connections[1](x, self.feed_forward_block)
-        return x
-
-
-class Encoder(nn.Module):
-    def __init__(self, features: int, layers: nn.ModuleList, bias: bool = True) -> None:
-        super().__init__()
-        self.layers = layers
-        self.norm = nn.LayerNorm(features, bias=bias)
-
-    def forward(self, x):
-        for layer in self.layers:
-            x = layer(x)
-        return self.norm(x)
 
 
 class Transformer(nn.Module):
     def __init__(
             self,
-            encoder: Encoder,
-            src_embed: InputEmbeddings,
-            src_pos: PositionalEncoding,
-            projection_layer,
+            n_embd: int,
+            n_head: int,
+            d_ff: int,
+            n_layer: int,
+            vocab_size: int,
+            bias: bool = False,
+            dropout: float = 0.0,
     ) -> None:
         super().__init__()
-        self.encoder = encoder
-        self.src_embed = src_embed
-        self.src_pos = src_pos
-        self.projection_layer = projection_layer
+        self.embedding = nn.Embedding(vocab_size, n_embd)
+        self.pos_enc = PositionalEncoding(n_embd, dropout=dropout)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=n_embd,
+            nhead=n_head,
+            dim_feedforward=d_ff,
+            dropout=dropout,
+            activation="gelu",
+            bias=bias,
+            batch_first=True,
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layer)
+        self.output_layer = nn.Linear(n_embd, 1, bias=bias)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor):
-        # (batch, in_feats, n_embd)
+        # input: (batch, seq_len)
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-            x = self._encode(x)
-            # (batch, in_feats, vocab_size) -> (batch, in_feats * vocab_size)
-            x = x.view(x.size(0), -1)
-        x = self.projection_layer(x)
-        return nn.functional.sigmoid(x)
-
-    def _encode(self, src):
-        # (batch, seq_len, n_embd)
-        src = self.src_embed(src)
-        src = self.src_pos(src)
-        return self.encoder(src)
-
-    @classmethod
-    def build(
-            cls,
-            in_feats: int,
-            vocab_size: int,
-            n_layer: int,
-            n_head: int,
-            n_embd: int,
-            d_ff: int,
-            dropout: float = 0.0,
-            bias: bool = False,
-    ):
-        embd = InputEmbeddings(n_embd, vocab_size)
-        src_pos = PositionalEncoding(n_embd, in_feats, dropout)
-        # Create the encoder
-        encoder = Encoder(
-            n_embd,
-            nn.ModuleList(
-                [
-                    EncoderBlock(
-                        n_embd,
-                        MultiHeadAttentionBlock(n_embd, n_head, dropout),
-                        FeedForwardBlock(n_embd, d_ff, dropout, bias),
-                        dropout,
-                        bias,
-                    )
-                    for _ in range(n_layer)
-                ]
-            ),
-            bias=bias
-        )
-        # Create the projection layer
-        projection_layer = nn.Linear(in_feats * n_embd, 1, bias=bias)
-        # Create the transformer
-        transformer = Transformer(encoder, embd, src_pos, projection_layer)
-        # Initialize the parameters
-        for p in transformer.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-        return transformer
+            x = self.embedding(x)  # -> (batch, seq_len, n_embd)
+            x = self.pos_enc(x)  # -> (batch, seq_len, n_embd)
+            x = self.transformer_encoder(x)  # -> (batch, seq_len, vocab_size)
+            x = x.mean(dim=1)  # -> (batch, vocab_size)
+        x = self.output_layer(x)  # -> (batch, 1)
+        return self.sigmoid(x)
 
 
 def get_transformer(
-        in_feats: int,
         vocab_size: int,
         n_layer: int,
         n_head: int,
         n_embd: int,
         d_ff: int,
         dropout: float = 0.0,
-        bias: bool = True,
-        device: str = "cuda",
+        bias: bool = False,
         learning_rate: float = 1e-3,
+        device: str = "cuda",
         **kwargs
 ) -> tt.Model:
     torch.manual_seed(SEED)
@@ -241,11 +84,10 @@ def get_transformer(
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
-    net = Transformer.build(in_feats, vocab_size, n_layer, n_head, n_embd, d_ff, dropout, bias)
+    net = Transformer(n_embd, n_head, d_ff, n_layer, vocab_size, bias, dropout)
     # net = torch.compile(net)
     optimizer = tt.optim.AdamW(lr=learning_rate)
     model = tt.Model(net, loss=nn.BCELoss(), optimizer=optimizer, device=device)
-
     model.predict_proba = partial(model.predict_net, batch_size=128, to_cpu=True)
     return model
 
