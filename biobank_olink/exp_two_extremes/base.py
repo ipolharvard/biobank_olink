@@ -73,6 +73,7 @@ def get_model_params(model: Model, trial: optuna.Trial):
             "dropout": trial.suggest_float("dropout", 0, 0.5),
             "vocab_size": trial.suggest_int("vocab_size", 11, 101),
             "bias": trial.suggest_categorical("bias", [True, False]),
+            "d_ff": trial.suggest_int("d_ff", 8, 512, 8),
         }
     else:
         raise NotImplementedError()
@@ -90,8 +91,8 @@ def get_fitted_model(model_name: Model, params, dataset: tuple, gpu_id: int):
     elif model_name == Model.TRANSFORMER:
         model = get_transformer(**params, device=gpu_id)
         model.fit(input=dataset, batch_size=params["batch_size"], epochs=params["epochs"],
-                  verbose=False, callbacks=[EarlyStopping(patience=5, dataset="train")],
-                  torch_ds_dl=True)
+                  verbose=False, torch_ds_dl=True, shuffle=True,
+                  callbacks=[EarlyStopping(patience=5, dataset="train")])
     else:
         raise NotImplementedError()
     return model

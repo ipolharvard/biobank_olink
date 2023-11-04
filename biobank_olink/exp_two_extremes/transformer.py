@@ -12,12 +12,12 @@ from biobank_olink.constants import SEED
 
 
 class FeedForwardBlock(nn.Module):
-    def __init__(self, n_embd: int, dropout: float, bias: bool = True) -> None:
+    def __init__(self, n_embd: int, d_ff: int, dropout: float, bias: bool = True) -> None:
         super().__init__()
-        self.linear_1 = nn.Linear(n_embd, 2 * n_embd, bias=bias)  # w1 and b1
+        self.linear_1 = nn.Linear(n_embd, d_ff, bias=bias)  # w1 and b1
         self.gelu = nn.GELU()
         self.dropout = nn.Dropout(dropout)
-        self.linear_2 = nn.Linear(2 * n_embd, n_embd, bias=bias)  # w2 and b2
+        self.linear_2 = nn.Linear(d_ff, n_embd, bias=bias)  # w2 and b2
 
     def forward(self, x):
         # (batch, seq_len, n_embd) --> (batch, seq_len, d_ff) --> (batch, seq_len, n_embd)
@@ -189,6 +189,7 @@ class Transformer(nn.Module):
             n_layer: int,
             n_head: int,
             n_embd: int,
+            d_ff: int,
             dropout: float = 0.0,
             bias: bool = False,
     ):
@@ -202,7 +203,7 @@ class Transformer(nn.Module):
                     EncoderBlock(
                         n_embd,
                         MultiHeadAttentionBlock(n_embd, n_head, dropout),
-                        FeedForwardBlock(n_embd, dropout, bias),
+                        FeedForwardBlock(n_embd, d_ff, dropout, bias),
                         dropout,
                         bias,
                     )
@@ -228,6 +229,7 @@ def get_transformer(
         n_layer: int,
         n_head: int,
         n_embd: int,
+        d_ff: int,
         dropout: float = 0.0,
         bias: bool = True,
         device: str = "cuda",
@@ -239,7 +241,7 @@ def get_transformer(
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
-    net = Transformer.build(in_feats, vocab_size, n_layer, n_head, n_embd, dropout, bias)
+    net = Transformer.build(in_feats, vocab_size, n_layer, n_head, n_embd, d_ff, dropout, bias)
     # net = torch.compile(net)
     optimizer = tt.optim.AdamW(lr=learning_rate)
     model = tt.Model(net, loss=nn.BCELoss(), optimizer=optimizer, device=device)
