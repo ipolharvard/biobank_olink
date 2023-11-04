@@ -12,19 +12,19 @@ from biobank_olink.constants import SEED
 
 
 class FeedForwardBlock(nn.Module):
-    def __init__(self, n_embd: int, dropout: float) -> None:
+    def __init__(self, n_embd: int, dropout: float, bias: bool = True) -> None:
         super().__init__()
-        self.linear_1 = nn.Linear(n_embd, 4 * n_embd)  # w1 and b1
+        self.linear_1 = nn.Linear(n_embd, 2 * n_embd, bias=bias)  # w1 and b1
         self.gelu = nn.GELU()
         self.dropout = nn.Dropout(dropout)
-        self.linear_2 = nn.Linear(4 * n_embd, n_embd)  # w2 and b2
+        self.linear_2 = nn.Linear(2 * n_embd, n_embd, bias=bias)  # w2 and b2
 
     def forward(self, x):
         # (batch, seq_len, n_embd) --> (batch, seq_len, d_ff) --> (batch, seq_len, n_embd)
         x = self.linear_1(x)
         x = self.gelu(x)
-        x = self.dropout(x)
         x = self.linear_2(x)
+        x = self.dropout(x)
         return x
 
 
@@ -70,10 +70,10 @@ class PositionalEncoding(nn.Module):
 
 
 class ResidualConnection(nn.Module):
-    def __init__(self, features: int, dropout: float) -> None:
+    def __init__(self, features: int, dropout: float, bias: bool = True) -> None:
         super().__init__()
         self.dropout = nn.Dropout(dropout)
-        self.norm = nn.LayerNorm(features)
+        self.norm = nn.LayerNorm(features, bias=bias)
 
     def forward(self, x, sublayer):
         return x + self.dropout(sublayer(self.norm(x)))
@@ -125,12 +125,13 @@ class EncoderBlock(nn.Module):
             self_attention_block: MultiHeadAttentionBlock,
             feed_forward_block: FeedForwardBlock,
             dropout: float,
+            bias: bool = True,
     ) -> None:
         super().__init__()
         self.self_attention_block = self_attention_block
         self.feed_forward_block = feed_forward_block
         self.residual_connections = nn.ModuleList(
-            [ResidualConnection(features, dropout) for _ in range(2)]
+            [ResidualConnection(features, dropout, bias=bias) for _ in range(2)]
         )
 
     def forward(self, x):
@@ -140,10 +141,10 @@ class EncoderBlock(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, features: int, layers: nn.ModuleList) -> None:
+    def __init__(self, features: int, layers: nn.ModuleList, bias: bool = True) -> None:
         super().__init__()
         self.layers = layers
-        self.norm = nn.LayerNorm(features)
+        self.norm = nn.LayerNorm(features, bias=bias)
 
     def forward(self, x):
         for layer in self.layers:
@@ -172,7 +173,7 @@ class Transformer(nn.Module):
             # (batch, in_feats, vocab_size) -> (batch, in_feats * vocab_size)
             x = x.view(x.size(0), -1)
         x = self.projection_layer(x)
-        return torch.nn.functional.sigmoid(x)
+        return nn.functional.sigmoid(x)
 
     def _encode(self, src):
         # (batch, seq_len, n_embd)
@@ -189,6 +190,7 @@ class Transformer(nn.Module):
             n_head: int,
             n_embd: int,
             dropout: float = 0.0,
+            bias: bool = False,
     ):
         embd = InputEmbeddings(n_embd, vocab_size)
         src_pos = PositionalEncoding(n_embd, in_feats, dropout)
@@ -200,15 +202,17 @@ class Transformer(nn.Module):
                     EncoderBlock(
                         n_embd,
                         MultiHeadAttentionBlock(n_embd, n_head, dropout),
-                        FeedForwardBlock(n_embd, dropout),
+                        FeedForwardBlock(n_embd, dropout, bias),
                         dropout,
+                        bias,
                     )
                     for _ in range(n_layer)
                 ]
             ),
+            bias=bias
         )
         # Create the projection layer
-        projection_layer = nn.Linear(in_feats * n_embd, 1)
+        projection_layer = nn.Linear(in_feats * n_embd, 1, bias=bias)
         # Create the transformer
         transformer = Transformer(encoder, embd, src_pos, projection_layer)
         # Initialize the parameters
@@ -225,6 +229,7 @@ def get_transformer(
         n_head: int,
         n_embd: int,
         dropout: float = 0.0,
+        bias: bool = True,
         device: str = "cuda",
         learning_rate: float = 1e-3,
         **kwargs
@@ -234,12 +239,12 @@ def get_transformer(
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
-    net = Transformer.build(in_feats, vocab_size, n_layer, n_head, n_embd, dropout)
+    net = Transformer.build(in_feats, vocab_size, n_layer, n_head, n_embd, dropout, bias)
     # net = torch.compile(net)
     optimizer = tt.optim.AdamW(lr=learning_rate)
     model = tt.Model(net, loss=nn.BCELoss(), optimizer=optimizer, device=device)
 
-    model.predict_proba = partial(model.predict_net, batch_size=1024, to_cpu=True)
+    model.predict_proba = partial(model.predict_net, batch_size=128, to_cpu=True)
     return model
 
 

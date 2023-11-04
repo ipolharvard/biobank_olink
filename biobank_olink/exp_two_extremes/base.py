@@ -3,6 +3,7 @@ Contains the base code for the experiment that is invoked by the CLI. Check comm
 info.
 """
 import time
+import traceback
 import warnings
 from copy import deepcopy
 from datetime import datetime
@@ -63,14 +64,15 @@ def get_model_params(model: Model, trial: optuna.Trial):
         return params
     elif model == Model.TRANSFORMER:
         return {
-            "epochs": trial.suggest_int("epochs", 5, 200),
-            "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-1, log=True),
-            "batch_size": trial.suggest_int("batch_size", 16, 256, 8),
-            "n_layer": trial.suggest_int("n_layer", 1, 6),
-            "n_embd": trial.suggest_int("n_embd", 32, 512, 16),
-            "n_head": trial.suggest_categorical("n_head", [1, 2, 4, 8, 16]),
-            "dropout": trial.suggest_float("dropout", 0.1, 0.5),
+            "epochs": trial.suggest_int("epochs", 10, 300),
+            "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-2, log=True),
+            "batch_size": trial.suggest_int("batch_size", 8, 64, 8),
+            "n_layer": trial.suggest_int("n_layer", 1, 2),
+            "n_embd": trial.suggest_int("n_embd", 8, 256, 8),
+            "n_head": trial.suggest_categorical("n_head", [1, 2, 4, 8]),
+            "dropout": trial.suggest_float("dropout", 0, 0.5),
             "vocab_size": trial.suggest_int("vocab_size", 11, 101),
+            "bias": trial.suggest_categorical("bias", [True, False]),
         }
     else:
         raise NotImplementedError()
@@ -88,7 +90,8 @@ def get_fitted_model(model_name: Model, params, dataset: tuple, gpu_id: int):
     elif model_name == Model.TRANSFORMER:
         model = get_transformer(**params, device=gpu_id)
         model.fit(input=dataset, batch_size=params["batch_size"], epochs=params["epochs"],
-                  callbacks=[EarlyStopping(patience=5, checkpoint_model=False, load_best=False)])
+                  verbose=False, callbacks=[EarlyStopping(patience=5, dataset="train")],
+                  torch_ds_dl=True)
     else:
         raise NotImplementedError()
     return model
@@ -131,10 +134,13 @@ def run_optuna_search(trial: optuna.Trial, dataset, args):
     # prevent optuna from running the same trial twice
     for prev_trial in trial.study.trials:
         if prev_trial.state in OPTUNA_STATE_CHECKED and prev_trial.params == trial.params:
+            logger.info(f"Params have been evaluated already: {params}")
             raise optuna.TrialPruned()
     try:
         return cross_validation_loop(dataset, params, args, trial)
-    except OutOfMemoryError:
+    except OutOfMemoryError as e:
+        stack_trace = traceback.format_exc()
+        logger.error(f"Cuda OOM: {params}, {stack_trace}")
         raise optuna.TrialPruned()
 
 
