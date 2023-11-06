@@ -7,7 +7,7 @@ import torch as th
 import torch.nn as nn
 import torchtuples as tt
 
-from ..constants import SEED
+from .constants import SEED
 
 
 class PositionalEncoding(nn.Module):

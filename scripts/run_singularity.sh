@@ -2,8 +2,8 @@
 #SBATCH --job-name=ukb_olink
 #SBATCH --time=7-00:00:00
 #SBATCH --partition=defq
-#SBATCH --gres=gpu:5
-#SBATCH --output=olink.log
+#SBATCH --gres=gpu:8
+#SBATCH --output=olink3.log
 
 module load singularity
 
@@ -17,4 +17,4 @@ singularity exec \
     bash -c "cd /olink/biobank_olink &&
     python setup.py develop --user --no-deps &&
     export PATH=\$HOME/.local/bin:\$PATH &&
-    bash scripts/run_two_extremes_exp.sh"
+    bash scripts/run_experiment.sh 3"

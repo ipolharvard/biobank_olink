@@ -95,7 +95,7 @@ def two_extremes(
     x, y = get_data(target, model, panel, threshold, nan_th, corr_th)
     if no_ren:
         x.drop(columns=["REN"], inplace=True)
-    logger.info(f"Data loaded x: {x.shape}, y: {y.shape}")
+    logger.info(f"Data loaded x: {x.shape}, y: {y.shape} [positives: {y.sum() / len(y):.2%}]")
 
     exp_props = SimpleNamespace(
         study_name=study_name,

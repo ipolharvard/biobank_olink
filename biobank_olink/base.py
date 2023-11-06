@@ -26,7 +26,7 @@ from xgboost import XGBClassifier
 from .constants import OPTUNA_DB_DIR, OPTUNA_STATE_CHECKED, Model, MAX_OUTER_SPLITS, \
     MAX_INNER_SPLITS, RESULTS_DIR
 from .constants import SEED
-from .exp_two_extremes.transformer import get_transformer, Tokenizer
+from .transformer import get_transformer, Tokenizer
 from .utils import get_gpu_id, get_logger
 
 warnings.filterwarnings("ignore")
