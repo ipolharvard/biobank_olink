@@ -58,8 +58,7 @@ def get_data(
     y = chosen_cov_df.index.isin(high_cov_df.index).reshape(-1, 1)
 
     if panel != Panel.ALL:
-        assays_mapping = get_olink_panel_mapping()
-        x = x.loc[:, x.columns.isin(assays_mapping[panel])]
+        x = x.loc[:, x.columns.isin(get_olink_panel_mapping()[panel.value])]
 
     if model == Model.LOG_REG:
         x.fillna(x.median(), inplace=True)

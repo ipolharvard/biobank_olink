@@ -94,8 +94,7 @@ def pred_diagnosis(
 
     ol_df = ol_df.loc[cov_df.index].copy()
     if panel != Panel.ALL:
-        assays_mapping = get_olink_panel_mapping()
-        ol_df = ol_df.loc[:, ol_df.columns.isin(assays_mapping[panel])]
+        ol_df = ol_df.loc[:, ol_df.columns.isin(get_olink_panel_mapping()[panel.value])]
 
     cov_cols = ["age", "sex"]
     if lifestyle:
