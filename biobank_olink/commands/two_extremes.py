@@ -23,6 +23,7 @@ logger = get_logger()
     show_default=True,
     help="Upper and lower percentiles to create the two extremes of the target variable.",
 )
+@option("--no_ren", is_flag=True, default=False)
 @option(
     "--nan_th",
     type=float,
@@ -76,6 +77,7 @@ def two_extremes(
         threshold: float,
         nan_th: Optional[float],
         corr_th: Optional[float],
+        no_ren: bool,
         **exp_kwargs
 ):
     target = Target(target)
@@ -86,9 +88,13 @@ def two_extremes(
     study_name += f"_{target.value}"
     if threshold:
         study_name += f"_th{threshold}"
+    if no_ren:
+        study_name += "_noren"
     logger.info(f"Study started: '{study_name}'")
 
     x, y = get_data(target, model, panel, threshold, nan_th, corr_th)
+    if no_ren:
+        x.drop(columns=["REN"], inplace=True)
     logger.info(f"Data loaded x: {x.shape}, y: {y.shape}")
 
     exp_props = SimpleNamespace(
