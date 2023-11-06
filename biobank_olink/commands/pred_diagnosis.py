@@ -1,28 +1,21 @@
 from types import SimpleNamespace
 from typing import Optional
 
+import pandas as pd
 from click import command, option, Choice
 
 from biobank_olink.base import run_optuna_pipeline
-from biobank_olink.constants import Target, Model, Panel
-from biobank_olink.exp_two_extremes import get_data
+from biobank_olink.constants import Model, Panel
+from biobank_olink.dataset import load_olink_and_covariates, get_olink_panel_mapping
 from biobank_olink.utils import get_logger, get_study_name
 
 logger = get_logger()
 
 
 @command
-@option("--target", type=Choice([t.value for t in Target]))
 @option("--model", type=Choice([m.value for m in Model]))
 @option("--panel", default=Panel.ALL.value, show_default=True,
         type=Choice([p.value for p in Panel]))
-@option(
-    "--threshold",
-    type=float,
-    default=0.35,
-    show_default=True,
-    help="Upper and lower percentiles to create the two extremes of the target variable.",
-)
 @option(
     "--nan_th",
     type=float,
@@ -69,31 +62,45 @@ logger = get_logger()
 )
 @option("--num_gpus", type=int, default=1, metavar="N", show_default=True,
         help="The number of GPUs to use.")
-def two_extremes(
-        target: str,
+def pred_diagnosis(
         model: str,
         panel: str,
-        threshold: float,
         nan_th: Optional[float],
         corr_th: Optional[float],
         **exp_kwargs
 ):
-    target = Target(target)
     model = Model(model)
     panel = Panel(panel)
-    study_name = get_study_name(exp_name="two_extremes", target=target, model=model, panel=panel,
-                                threshold=threshold, nan_th=nan_th, corr_th=corr_th)
-    logger.info(f"Study started: '{study_name}'")
+    study_name = get_study_name(exp_name="pred_diagnosis", model=model, panel=panel, nan_th=nan_th,
+                                corr_th=corr_th)
 
-    x, y = get_data(target, model, panel, threshold, nan_th, corr_th)
+    ol_df, cov_df = load_olink_and_covariates(nan_th, nan_th, corr_th)
+    # remove those who take HTN medication at baseline
+    cov_df = cov_df.loc[cov_df.HTNgroup < 2].copy()
+    # remove those who had I20 before baseline
+    cov_df = cov_df.loc[cov_df.timeHTNcoxfinal >= 0].copy()
+
+    x = ol_df.loc[cov_df.index].copy()
+    # positive cases are patients who developed HTN within 5 years
+    y = ((cov_df.HTNcaseCoxfinal == 1) & (cov_df.timeHTNcoxfinal < 365.25 * 5)).values.reshape(-1,
+                                                                                               1)
+    if panel != Panel.ALL:
+        assays_mapping = get_olink_panel_mapping()
+        x = x.loc[:, x.columns.isin(assays_mapping[panel])]
+
+    cov_cols = ["age", "sex", "bmi", "sbp", "dbp", "pp"]
+    x = pd.concat([cov_df[cov_cols], x], axis=1, verify_integrity=True)
+
+    if model == Model.LOG_REG:
+        x.fillna(x.median(), inplace=True)
+        x = (x - x.mean()) / x.std()
+
     logger.info(f"Data loaded x: {x.shape}, y: {y.shape}")
 
     exp_props = SimpleNamespace(
         study_name=study_name,
-        target=target,
         model=model,
         panel=panel,
-        threshold=threshold,
         nan_th=nan_th,
         corr_th=corr_th,
         **exp_kwargs

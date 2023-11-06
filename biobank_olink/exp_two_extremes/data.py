@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial.distance import squareform, pdist
 
-from .constants import Target, Model, Panel
+from ..constants import Target, Model, Panel
 from ..dataset import load_olink_and_covariates, get_olink_panel_mapping
 
 

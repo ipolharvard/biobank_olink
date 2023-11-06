@@ -2,6 +2,7 @@
 Contains the base code for the experiment that is invoked by the CLI. Check commands dir for more
 info.
 """
+import json
 import time
 import traceback
 import warnings
@@ -23,10 +24,10 @@ from torchtuples.callbacks import EarlyStopping
 from xgboost import XGBClassifier
 
 from .constants import OPTUNA_DB_DIR, OPTUNA_STATE_CHECKED, Model, MAX_OUTER_SPLITS, \
-    MAX_INNER_SPLITS
-from .transformer import get_transformer, Tokenizer
-from ..constants import SEED
-from ..utils import get_gpu_id, get_logger
+    MAX_INNER_SPLITS, RESULTS_DIR
+from .constants import SEED
+from .exp_two_extremes.transformer import get_transformer, Tokenizer
+from .utils import get_gpu_id, get_logger
 
 warnings.filterwarnings("ignore")
 
@@ -112,6 +113,7 @@ def cross_validation_loop(dataset, model_params, args, trial):
             tokenizer = Tokenizer(n_bins=model_params["vocab_size"] - 1)
             x_train = tokenizer.fit_transform(x_train).values
             x_test = tokenizer.transform(x_test).values
+            model_params["in_feats"] = x_train.shape[1]
 
         model = get_fitted_model(
             args.model,
@@ -195,6 +197,7 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
         tokenizer = Tokenizer(n_bins=best_params["vocab_size"] - 1)
         x_train = tokenizer.fit_transform(x_train).values
         x_test = tokenizer.transform(x_test).values
+        best_params["in_feats"] = x_train.shape[1]
 
     model = get_fitted_model(
         args.model,
@@ -230,7 +233,7 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
     logger.info(f"Fold completed - '{study_name}', auc_score: {summary['auc_score']:.4f}")
 
 
-def run_two_extremes_experiment(x, y, exp_props):
+def run_optuna_pipeline(x, y, exp_props):
     processes, mgr = [], Manager()
     d = mgr.dict()
     splits = StratifiedKFold(n_splits=MAX_OUTER_SPLITS, shuffle=True, random_state=SEED).split(x, y)
@@ -251,4 +254,19 @@ def run_two_extremes_experiment(x, y, exp_props):
 
     experiment_results = list(d.values())
     mgr.shutdown()
-    return experiment_results
+
+    message = f"Completed the study '{exp_props.study_name}'"
+    if len(experiment_results) != exp_props.outer_splits:
+        logger.warning(
+            message + f", {len(experiment_results)} out of {exp_props.outer_splits} folds")
+    else:
+        logger.info(message)
+
+    RESULTS_DIR.mkdir(exist_ok=True)
+    with open(RESULTS_DIR / f"{exp_props.study_name}.json", "w") as f:
+        json.dump(
+            experiment_results,
+            f,
+            indent=4,
+            default=lambda obj: obj.name if hasattr(obj, "name") else "unknown",
+        )
