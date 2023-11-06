@@ -4,7 +4,7 @@ from typing import Optional
 
 import colorlog
 
-from .constants import Target, Model, Panel, SEED
+from .constants import Model, Panel
 
 _default_handler: Optional[logging.Handler] = None
 _log_colors = {
@@ -56,24 +56,18 @@ def get_gpu_id(num_gpus: int, num_outer_processes: int):
 
 def get_study_name(
         exp_name: str,
-        target: Optional[Target] = None,
         model: Optional[Model] = None,
         panel: Optional[Panel] = None,
-        threshold: float = 0,
         nan_th: Optional[float] = None,
         corr_th: Optional[float] = None,
 ):
     study_name = exp_name
-    if target is not None:
-        study_name += f"_{target.value}"
     if model is not None:
         study_name += f"_{model.value}"
-    if threshold is not None:
-        study_name += f"_th{threshold}"
     if nan_th:
         study_name += f"_nan{nan_th}"
     if corr_th:
         study_name += f"_corr{corr_th}"
     if panel != Panel.ALL:
         study_name += f"_{panel.value.lower()[:5]}"
-    return study_name + f"_s{SEED}"
+    return study_name

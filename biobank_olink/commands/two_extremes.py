@@ -81,8 +81,11 @@ def two_extremes(
     target = Target(target)
     model = Model(model)
     panel = Panel(panel)
-    study_name = get_study_name(exp_name="two_extremes", target=target, model=model, panel=panel,
-                                threshold=threshold, nan_th=nan_th, corr_th=corr_th)
+    study_name = get_study_name(exp_name="two_extremes", model=model, panel=panel, nan_th=nan_th,
+                                corr_th=corr_th)
+    study_name += f"_{target.value}"
+    if threshold:
+        study_name += f"_th{threshold}"
     logger.info(f"Study started: '{study_name}'")
 
     x, y = get_data(target, model, panel, threshold, nan_th, corr_th)
