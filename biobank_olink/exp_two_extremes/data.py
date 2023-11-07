@@ -1,3 +1,5 @@
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import squareform, pdist
@@ -8,9 +10,9 @@ from ..dataset import load_olink_and_covariates, get_olink_panel_mapping
 
 def get_data(
         target: Target,
-        model: Model,
-        panel: Panel,
         threshold: float,
+        model: Optional[Model] = None,
+        panel: Panel = Panel.ALL,
         nan_th: float = 0,
         corr_th: float = 0,
 ):
@@ -27,21 +29,20 @@ def get_data(
     correction_df = pd.concat([low_cov_df, high_cov_df])
     correction_cols = ["sex", "age", "bmi"]
     correction_df = correction_df[correction_cols]
+    # standardize selected data
     correction_df = (correction_df - correction_df.mean()) / correction_df.std()
-
+    # use Euclidean distance
     similarities = squareform(pdist(correction_df, metric="euclidean"))
     np.fill_diagonal(similarities, np.inf)
     similarities_df = pd.DataFrame(
         similarities, index=correction_df.index, columns=correction_df.index
     )
-    del similarities, correction_df
     similarities_sub_df = similarities_df.loc[low_cov_df.index, high_cov_df.index]
-
+    # find the most similar pairs
     paired_up_df = similarities_sub_df.idxmin().to_frame("p2_id")
     paired_up_df["dist"] = similarities_df.min()
     paired_up_df2 = similarities_sub_df.T.idxmin().to_frame("p2_id")
     paired_up_df2["dist"] = similarities_df.T.min()
-    del similarities_df
     paired_up_df = pd.concat([paired_up_df, paired_up_df2])
     paired_up_df.sort_values(by="dist", inplace=True)
 
@@ -53,7 +54,7 @@ def get_data(
         chosen.add(p2_idx)
 
     chosen_cov_df = cov_df.loc[list(chosen)]
-    high_cov_df = chosen_cov_df[upper_bound < chosen_cov_df[target]]
+    high_cov_df = chosen_cov_df[upper_bound <= chosen_cov_df[target]]
     x = ol_df.loc[chosen_cov_df.index]
     y = chosen_cov_df.index.isin(high_cov_df.index).reshape(-1, 1)
 

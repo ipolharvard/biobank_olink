@@ -92,7 +92,7 @@ def two_extremes(
         study_name += "_noren"
     logger.info(f"Study started: '{study_name}'")
 
-    x, y = get_data(target, model, panel, threshold, nan_th, corr_th)
+    x, y = get_data(target, threshold, model, panel, nan_th, corr_th)
     if no_ren:
         x.drop(columns=["REN"], inplace=True)
     logger.info(f"Data loaded x: {x.shape}, y: {y.shape} [positives: {y.sum() / len(y):.2%}]")

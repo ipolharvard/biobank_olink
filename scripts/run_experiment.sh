@@ -3,9 +3,9 @@ clear
 case $1 in
 1)
     biobank_olink two-extremes \
-        --target sdp \
+        --target dbp \
         --model xgb \
-        --panel all \
+        --panel cardiometabolic \
         --threshold 0.35 \
         --nan_th 0 \
         --corr_th 0.9 \
