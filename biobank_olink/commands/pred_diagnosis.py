@@ -123,6 +123,10 @@ def pred_diagnosis(
         panel=panel,
         nan_th=nan_th,
         corr_th=corr_th,
+        years=years,
+        lifestyle=lifestyle,
+        bp=bp,
+        olink=olink,
         **exp_kwargs
     )
     run_optuna_pipeline(x, y, exp_props)

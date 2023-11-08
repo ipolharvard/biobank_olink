@@ -105,6 +105,7 @@ def two_extremes(
         threshold=threshold,
         nan_th=nan_th,
         corr_th=corr_th,
+        no_ren=no_ren,
         **exp_kwargs
     )
     run_optuna_pipeline(x, y, exp_props)
