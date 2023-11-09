@@ -36,3 +36,8 @@ class Panel(Enum):
     INFLAMMATION = "inflammation"
     NEUROLOGY = "neurology"
     ONCOLOGY = "oncology"
+    ENDOTHELIAL = "endothelial"
+    IMMUNE = "immune"
+    INFLAM = "inflam"
+    BP = "bp"
+    RENAL = "renal"

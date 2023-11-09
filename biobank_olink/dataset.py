@@ -61,5 +61,8 @@ def get_olink_panel_mapping():
     olink_assays["Explore 384 panel"] = olink_assays.loc[:, "Explore 384 panel"].map(
         lambda x: x.split("_")[0].lower()
     )
-    assays_mapping = olink_assays.groupby("Explore 384 panel")["Gene name"].apply(list).to_dict()
-    return assays_mapping
+    panel_mapping = olink_assays.groupby("Explore 384 panel")["Gene name"].apply(list).to_dict()
+    custom_panels = pd.read_csv(PROJECT_DATA / "panels_gene_ontology.csv")
+    custom_panels = {col: custom_panels[col].dropna().tolist() for col in custom_panels}
+    panel_mapping.update(custom_panels)
+    return panel_mapping

@@ -2,12 +2,12 @@
 #SBATCH --job-name=ukb_olink
 #SBATCH --time=7-00:00:00
 #SBATCH --partition=defq
-#SBATCH --gres=gpu:5
+#SBATCH --gres=gpu:8
 #SBATCH --output=olink.log
 
 module load singularity
 
-export exp_number=3
+export exp_number=1
 
 script_text="
 cd /olink/biobank_olink
@@ -19,10 +19,9 @@ clear
 case \$exp_number in
 1)
     biobank_olink two-extremes \
-        --target pp \
+        --target sbp \
         --model xgb \
-        --panel inflammation \
-        --no_opt \
+        --panel renal \
         --threshold 0.35 \
         --nan_th 0 \
         --corr_th 0.9 \
@@ -37,10 +36,6 @@ case \$exp_number in
         --model xgb \
         --panel all \
         --years 5 \
-        --lifestyle \
-        --bp \
-        --olink \
-        --no_opt \
         --nan_th 0 \
         --corr_th 0.9 \
         --n_trials 300 \
