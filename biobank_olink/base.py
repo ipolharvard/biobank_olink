@@ -65,14 +65,14 @@ def get_model_params(model: Model, trial: optuna.Trial):
         return params
     elif model == Model.TRANSFORMER:
         return {
-            "epochs": trial.suggest_int("epochs", 10, 300),
-            "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-2, log=True),
+            "epochs": trial.suggest_int("epochs", 10, 200),
+            "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-1, log=True),
             "batch_size": trial.suggest_int("batch_size", 8, 64, 8),
             "n_layer": trial.suggest_int("n_layer", 1, 2),
             "n_embd": trial.suggest_int("n_embd", 8, 128, 8),
             "n_head": trial.suggest_categorical("n_head", [1, 2, 4]),
             "dropout": trial.suggest_float("dropout", 0, 0.5),
-            "vocab_size": trial.suggest_int("vocab_size", 11, 201),
+            "vocab_size": trial.suggest_int("vocab_size", 6, 101),
             "bias": trial.suggest_categorical("bias", [True, False]),
             "d_ff": trial.suggest_int("d_ff", 8, 128, 8),
         }
@@ -155,14 +155,18 @@ def get_optuna_optimized_params(study_name, dataset, args):
     )
 
     def run_optuna_worker():
-        study = optuna.load_study(
+        pruner = optuna.pruners.MedianPruner(n_startup_trials=100, n_warmup_steps=2)
+        if args.model == Model.TRANSFORMER:
+            pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=1)
+
+        _study = optuna.load_study(
             study_name=study_name,
             storage=storage,
             sampler=optuna.samplers.TPESampler(seed=None),
-            pruner=optuna.pruners.MedianPruner(n_startup_trials=100, n_warmup_steps=2),
+            pruner=pruner,
         )
         objective = partial(run_optuna_search, dataset=dataset, args=deepcopy(args))
-        study.optimize(func=objective, callbacks=callbacks)
+        _study.optimize(func=objective, callbacks=callbacks)
 
     if not args.no_opt:
         processes = []

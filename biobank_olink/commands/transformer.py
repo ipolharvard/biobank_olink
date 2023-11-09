@@ -86,6 +86,7 @@ def transformer(
         panel=panel,
         nan_th=nan_th,
         corr_th=corr_th,
+        x_shape=x.shape,
         **exp_kwargs
     )
     run_optuna_pipeline(x, y, exp_props)

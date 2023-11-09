@@ -38,6 +38,6 @@ class Panel(Enum):
     ONCOLOGY = "oncology"
     ENDOTHELIAL = "endothelial"
     IMMUNE = "immune"
-    INFLAM = "inflam"
+    INFL2 = "infl2"
     BP = "bp"
     RENAL = "renal"
