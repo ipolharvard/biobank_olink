@@ -1,11 +1,12 @@
 from types import SimpleNamespace
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from click import command, option, Choice
 
 from biobank_olink.base import run_optuna_pipeline
-from biobank_olink.constants import Model, Panel
+from biobank_olink.constants import Model, Panel, PROJECT_DATA
 from biobank_olink.dataset import load_olink_and_covariates, get_olink_panel_mapping
 from biobank_olink.utils import get_logger, get_study_name
 
@@ -18,6 +19,7 @@ logger = get_logger()
         type=Choice([p.value for p in Panel]))
 @option("--years", type=int, default=5, show_default=True)
 @option("--lifestyle", is_flag=True, default=False)
+@option("--ext", is_flag=True, default=False)
 @option("--olink", is_flag=True, default=False)
 @option(
     "--nan_th",
@@ -72,7 +74,7 @@ def pred_diagnosis(
         corr_th: Optional[float],
         years: int,
         lifestyle: bool,
-        bp: bool,
+        ext: bool,
         olink: bool,
         **exp_kwargs
 ):
@@ -97,11 +99,20 @@ def pred_diagnosis(
 
     x = cov_df[["age", "sex"]]
     if lifestyle:
-        cov_cols_num = ["bmi", "fastingtime", "deprivation"]
+        cov_cols_num = ["bmi", "fastingtime", "deprivation", "educationuni"]
         cov_cols_cat = ["smoking", "alcohol", "physactivity"]
-        one_hot_df = pd.get_dummies(cov_df[cov_cols_cat], columns=cov_cols_cat)
-        x = pd.concat([x, cov_df[cov_cols_num], one_hot_df], axis=1, verify_integrity=True)
+        one_hot_chunks = []
+        for cat_col in cov_cols_cat:
+            one_hot_col = pd.get_dummies(cov_df[cat_col], columns=cat_col).astype(float)
+            one_hot_col.loc[cov_df[cat_col].isna()] = np.nan
+            one_hot_col.columns = [f"{cat_col}_{col}" for col in one_hot_col.columns]
+            one_hot_chunks.append(one_hot_col)
+        x = pd.concat([x, cov_df[cov_cols_num], *one_hot_chunks], axis=1, verify_integrity=True)
         study_name += "_lifestyle"
+
+    if ext:
+        ext_df = pd.read_csv(PROJECT_DATA / "biomarker_clinical.csv.gz", index_col="eid")
+        x = pd.concat([x, ext_df], axis=1, verify_integrity=True)
 
     if olink:
         x = pd.concat([x, ol_df], axis=1, verify_integrity=True)
@@ -122,7 +133,7 @@ def pred_diagnosis(
         corr_th=corr_th,
         years=years,
         lifestyle=lifestyle,
-        bp=bp,
+        ext=ext,
         olink=olink,
         x_shape=x.shape,
         **exp_kwargs

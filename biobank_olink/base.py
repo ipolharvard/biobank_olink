@@ -39,7 +39,7 @@ def get_model_params(model: Model, trial: optuna.Trial):
         return {
             "learning_rate": trial.suggest_float("learning_rate", 0.001, 0.5, log=True),
             "n_estimators": trial.suggest_int("n_estimators", 50, 5000),
-            "max_depth": trial.suggest_int("max_depth", 1, 20),
+            "max_depth": trial.suggest_int("max_depth", 1, 12),
             "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
             "subsample": trial.suggest_float("subsample", 0.1, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.1, 1.0),
