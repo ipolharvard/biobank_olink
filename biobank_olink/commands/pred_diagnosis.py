@@ -112,7 +112,8 @@ def pred_diagnosis(
 
     if ext:
         ext_df = pd.read_csv(PROJECT_DATA / "biomarker_clinical.csv.gz", index_col="eid")
-        x = pd.concat([x, ext_df], axis=1, verify_integrity=True)
+        x = x.join(ext_df, how="left")
+        study_name += "_ext"
 
     if olink:
         x = pd.concat([x, ol_df], axis=1, verify_integrity=True)
