@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from joblib import Memory
 
-from .constants import PROJECT_DATA, PROJECT_ROOT
+from .constants import PROJECT_DATA, PROJECT_ROOT, Panel
 from .utils import get_logger
 
 logger = get_logger()
@@ -10,7 +10,7 @@ memory = Memory(PROJECT_ROOT / "cache", verbose=2)
 
 
 @memory.cache
-def load_olink_and_covariates(cols_na_th=0.3, rows_na_th=0.3, corr_th=None) -> tuple[
+def load_olink_and_covariates(cols_na_th=0, rows_na_th=0, corr_th=None) -> tuple[
     pd.DataFrame, pd.DataFrame]:
     """Load olink data and corresponding covariate features, and preprocess them.
     :param cols_na_th: Threshold for dropping columns with NaNs in olink.
@@ -63,6 +63,7 @@ def get_olink_panel_mapping():
     )
     panel_mapping = olink_assays.groupby("Explore 384 panel")["Gene name"].apply(list).to_dict()
     custom_panels = pd.read_csv(PROJECT_DATA / "panels_gene_ontology.csv")
-    custom_panels = {col: custom_panels[col].dropna().tolist() for col in custom_panels}
-    panel_mapping.update(custom_panels)
+    panel_mapping.update({col: custom_panels[col].dropna().tolist() for col in custom_panels})
+    panel_mapping[Panel.IMMUNE_INFL2.value] = panel_mapping[Panel.IMMUNE.value] + panel_mapping[
+        Panel.INFL2.value]
     return panel_mapping

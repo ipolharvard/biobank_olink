@@ -39,5 +39,6 @@ class Panel(Enum):
     ENDOTHELIAL = "endothelial"
     IMMUNE = "immune"
     INFL2 = "infl2"
+    IMMUNE_INFL2 = "imn_inf2"
     BP = "bp"
     RENAL = "renal"

@@ -18,7 +18,6 @@ logger = get_logger()
         type=Choice([p.value for p in Panel]))
 @option("--years", type=int, default=5, show_default=True)
 @option("--lifestyle", is_flag=True, default=False)
-@option("--bp", is_flag=True, default=False)
 @option("--olink", is_flag=True, default=False)
 @option(
     "--nan_th",
@@ -96,15 +95,13 @@ def pred_diagnosis(
     if panel != Panel.ALL:
         ol_df = ol_df.loc[:, ol_df.columns.isin(get_olink_panel_mapping()[panel.value])]
 
-    cov_cols = ["age", "sex"]
+    x = cov_df[["age", "sex"]]
     if lifestyle:
-        cov_cols += ["bmi", "fastingtime", "smoking", "alcohol"]
+        cov_cols_num = ["bmi", "fastingtime", "deprivation"]
+        cov_cols_cat = ["smoking", "alcohol", "physactivity"]
+        one_hot_df = pd.get_dummies(cov_df[cov_cols_cat], columns=cov_cols_cat)
+        x = pd.concat([x, cov_df[cov_cols_num], one_hot_df], axis=1, verify_integrity=True)
         study_name += "_lifestyle"
-    if bp:
-        cov_cols += ["sbp", "dbp", "pp"]
-        study_name += "_bp"
-
-    x = cov_df[cov_cols]
 
     if olink:
         x = pd.concat([x, ol_df], axis=1, verify_integrity=True)
@@ -127,6 +124,7 @@ def pred_diagnosis(
         lifestyle=lifestyle,
         bp=bp,
         olink=olink,
+        x_shape=x.shape,
         **exp_kwargs
     )
     run_optuna_pipeline(x, y, exp_props)
