@@ -12,6 +12,8 @@ logger = get_logger()
 
 
 @command
+@option("--model", default=Model.TRANSFORMER.value, show_default=True,
+        type=Choice([p.value for p in Model]))
 @option("--panel", default=Panel.ALL.value, show_default=True,
         type=Choice([p.value for p in Panel]))
 @option(
@@ -61,13 +63,15 @@ logger = get_logger()
 @option("--num_gpus", type=int, default=1, metavar="N", show_default=True,
         help="The number of GPUs to use.")
 def transformer(
+        model: str,
         panel: str,
         nan_th: Optional[float],
         corr_th: Optional[float],
         **exp_kwargs
 ):
+    model = Model(model)
     panel = Panel(panel)
-    study_name = get_study_name(exp_name="transformer", panel=panel, nan_th=nan_th,
+    study_name = get_study_name(exp_name="transformer", model=model, panel=panel, nan_th=nan_th,
                                 corr_th=corr_th)
     logger.info(f"Study started: '{study_name}'")
 
@@ -82,7 +86,7 @@ def transformer(
 
     exp_props = SimpleNamespace(
         study_name=study_name,
-        model=Model.TRANSFORMER,
+        model=model,
         panel=panel,
         nan_th=nan_th,
         corr_th=corr_th,

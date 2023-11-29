@@ -65,6 +65,7 @@ def get_model_params(model: Model, trial: optuna.Trial):
         return params
     elif model == Model.TRANSFORMER:
         return {
+            "vocab_size": trial.suggest_int("vocab_size", 3, 21),
             "epochs": trial.suggest_int("epochs", 10, 200),
             "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-1, log=True),
             "batch_size": trial.suggest_int("batch_size", 8, 64, 8),
@@ -72,7 +73,6 @@ def get_model_params(model: Model, trial: optuna.Trial):
             "n_embd": trial.suggest_int("n_embd", 8, 128, 8),
             "n_head": trial.suggest_categorical("n_head", [1, 2, 4]),
             "dropout": trial.suggest_float("dropout", 0, 0.5),
-            "vocab_size": trial.suggest_int("vocab_size", 6, 101),
             "bias": trial.suggest_categorical("bias", [True, False]),
             "d_ff": trial.suggest_int("d_ff", 8, 128, 8),
         }
