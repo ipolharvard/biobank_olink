@@ -44,6 +44,8 @@ def _setup_handler():
 
 def get_gpu_id(num_gpus: int, num_outer_processes: int):
     name = current_process().name
+    if name == "MainProcess":
+        return 0
     values = name.split("-")[-1].split(":")
     outer_process, inner_process = values if len(values) == 2 else (values[0], 0)
     proc_num = num_outer_processes * int(inner_process) + int(outer_process)
@@ -66,5 +68,5 @@ def get_study_name(
     if corr_th:
         study_name += f"_corr{corr_th}"
     if panel != Panel.ALL:
-        study_name += f"_{panel.value.lower()[:5]}"
+        study_name += f"_{panel.value.lower()}"
     return study_name

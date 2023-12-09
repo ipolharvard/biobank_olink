@@ -27,8 +27,7 @@ def get_data(
     low_cov_df = cov_df[cov_df[target] < lower_bound]
 
     correction_df = pd.concat([low_cov_df, high_cov_df])
-    correction_cols = ["sex", "age", "bmi"]
-    correction_df = correction_df[correction_cols]
+    correction_df = correction_df[["sex", "age", "bmi"]]
     # standardize selected data
     correction_df = (correction_df - correction_df.mean()) / correction_df.std()
     # use Euclidean distance

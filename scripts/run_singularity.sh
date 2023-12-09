@@ -3,11 +3,12 @@
 #SBATCH --time=7-00:00:00
 #SBATCH --partition=defq
 #SBATCH --gres=gpu:8
-#SBATCH --output=olink.log
+#SBATCH --output=olink2.log
+#SBATCH --error=olink2.log
 
 module load singularity
 
-export exp_number=1
+export exp_number=4
 
 script_text="
 cd /olink/biobank_olink
@@ -19,9 +20,10 @@ clear
 case \$exp_number in
 1)
     biobank_olink two-extremes \
-        --target sbp \
+        --target pp \
         --model xgb \
-        --panel renal \
+        --panel neurology \
+        --no_opt \
         --threshold 0.35 \
         --nan_th 0 \
         --corr_th 0.9 \
@@ -35,7 +37,9 @@ case \$exp_number in
     biobank_olink pred-diagnosis \
         --model xgb \
         --panel all \
-        --years 5 \
+        --years 10 \
+        --lifestyle \
+        --ext \
         --nan_th 0 \
         --corr_th 0.9 \
         --n_trials 300 \
@@ -46,6 +50,7 @@ case \$exp_number in
     ;;
 3)
     biobank_olink transformer \
+        --model tfr \
         --panel all \
         --nan_th 0 \
         --corr_th 0.9 \
@@ -53,6 +58,18 @@ case \$exp_number in
         --outer_splits 5 \
         --inner_splits 2 \
         --optuna_n_workers 1 \
+        --num_gpus \"\${SLURM_GPUS_ON_NODE}\"
+    ;;
+4)
+    biobank_olink pred-diag2 \
+        --model xgb \
+        --panel cardiometabolic \
+        --nan_th 0 \
+        --corr_th 0.9 \
+        --n_trials 8 \
+        --outer_splits 5 \
+        --inner_splits 2 \
+        --optuna_n_workers 8 \
         --num_gpus \"\${SLURM_GPUS_ON_NODE}\"
     ;;
 *)

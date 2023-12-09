@@ -37,20 +37,12 @@ logger = get_logger()
 def get_model_params(model: Model, trial: optuna.Trial):
     if model == Model.XGBOOST:
         return {
-            "learning_rate": trial.suggest_float("learning_rate", 0.001, 0.5, log=True),
+            "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.5, log=True),
             "n_estimators": trial.suggest_int("n_estimators", 50, 5000),
-            "max_depth": trial.suggest_int("max_depth", 1, 12),
-            "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
+            "max_depth": trial.suggest_int("max_depth", 2, 12),
             "subsample": trial.suggest_float("subsample", 0.1, 1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.1, 1.0),
-            "colsample_bylevel": trial.suggest_float("colsample_bylevel", 0.1, 1.0),
-            "colsample_bynode": trial.suggest_float("colsample_bynode", 0.1, 1.0),
-            "gamma": trial.suggest_float("gamma", 0, 10),
-            "scale_pos_weight": trial.suggest_float("scale_pos_weight", 0.01, 20),
-            "reg_alpha": trial.suggest_float("reg_alpha", 0, 1000),
-            "reg_lambda": trial.suggest_float("reg_lambda", 0, 1000),
-            "grow_policy": trial.suggest_categorical("grow_policy", ["depthwise", "lossguide"]),
-            "max_bin": trial.suggest_int("max_bin", 2, 1024),
+            "reg_alpha": trial.suggest_float("reg_alpha", 1e-6, 10, log=True),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-6, 10, log=True),
         }
     elif model == Model.LOG_REG:
         params = {
@@ -146,6 +138,21 @@ def run_optuna_search(trial: optuna.Trial, dataset, args):
         raise optuna.TrialPruned()
 
 
+def run_optuna_worker(study_name, dataset, storage, callbacks, args):
+    pruner = optuna.pruners.MedianPruner(n_startup_trials=25, n_warmup_steps=2)
+    if args.model == Model.TRANSFORMER:
+        pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=1)
+
+    _study = optuna.load_study(
+        study_name=study_name,
+        storage=storage,
+        sampler=optuna.samplers.TPESampler(seed=None),
+        pruner=pruner,
+    )
+    objective = partial(run_optuna_search, dataset=dataset, args=deepcopy(args))
+    _study.optimize(func=objective, callbacks=callbacks)
+
+
 def get_optuna_optimized_params(study_name, dataset, args):
     OPTUNA_DB_DIR.mkdir(exist_ok=True)
     storage = JournalStorage(JournalFileStorage(str(OPTUNA_DB_DIR / f"{study_name}.db")))
@@ -153,35 +160,18 @@ def get_optuna_optimized_params(study_name, dataset, args):
     study = optuna.create_study(
         study_name=study_name, direction="maximize", storage=storage, load_if_exists=True
     )
-
-    def run_optuna_worker():
-        pruner = optuna.pruners.MedianPruner(n_startup_trials=100, n_warmup_steps=2)
-        if args.model == Model.TRANSFORMER:
-            pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=1)
-
-        _study = optuna.load_study(
-            study_name=study_name,
-            storage=storage,
-            sampler=optuna.samplers.TPESampler(seed=None),
-            pruner=pruner,
-        )
-        objective = partial(run_optuna_search, dataset=dataset, args=deepcopy(args))
-        _study.optimize(func=objective, callbacks=callbacks)
-
     if not args.no_opt:
         processes = []
         for i in range(args.optuna_n_workers - 1):
-            p = Process(target=run_optuna_worker)
+            p = Process(target=run_optuna_worker,
+                        args=(study_name, dataset, storage, callbacks, args))
             p.start()
             processes.append(p)
             # prevent workers from accessing the same db file at the beginning
             time.sleep(3)
-
-        run_optuna_worker()
-
+        run_optuna_worker(study_name, dataset, storage, callbacks, args)
         for p in processes:
             p.join()
-
     study_stats = {
         "best_trial_no": study.best_trial.number,
         "num_trials": len(study.get_trials(deepcopy=False, states=OPTUNA_STATE_CHECKED)),
@@ -237,7 +227,7 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
     logger.info(f"Fold completed - '{study_name}', auc_score: {summary['auc_score']:.4f}")
 
 
-def run_optuna_pipeline(x, y, exp_props):
+def run_optuna_pipeline(x, y, exp_props, dump_results: bool = True):
     processes, mgr = [], Manager()
     d = mgr.dict()
     splits = StratifiedKFold(n_splits=MAX_OUTER_SPLITS, shuffle=True, random_state=SEED).split(x, y)
@@ -245,10 +235,9 @@ def run_optuna_pipeline(x, y, exp_props):
     for fold_num, (train_index, test_index) in enumerate(splits):
         temp_dataset = (x.iloc[train_index], y[train_index])
         test_dataset = (x.iloc[test_index], y[test_index])
-
         p = Process(
             target=one_fold_experiment_run,
-            args=(d, temp_dataset, test_dataset, fold_num, exp_props),
+            args=(d, temp_dataset, test_dataset, fold_num, exp_props)
         )
         p.start()
         processes.append(p)
@@ -266,11 +255,13 @@ def run_optuna_pipeline(x, y, exp_props):
     else:
         logger.info(message)
 
-    RESULTS_DIR.mkdir(exist_ok=True)
-    with open(RESULTS_DIR / f"{exp_props.study_name}.json", "w") as f:
-        json.dump(
-            experiment_results,
-            f,
-            indent=4,
-            default=lambda obj: obj.name if hasattr(obj, "name") else "unknown",
-        )
+    if dump_results:
+        RESULTS_DIR.mkdir(exist_ok=True)
+        with open(RESULTS_DIR / f"{exp_props.study_name}.json", "w") as f:
+            json.dump(
+                experiment_results,
+                f,
+                indent=4,
+                default=lambda obj: obj.name if hasattr(obj, "name") else "unknown",
+            )
+    return experiment_results
