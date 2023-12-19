@@ -17,7 +17,6 @@ dependencies = [
     "umap-learn",
     "shap",
     "xgboost",
-    "numba==0.56.4",
     "optuna",
     "click",
     "torch",

@@ -84,7 +84,7 @@ def prospective(
 ):
     model = Model(model)
     panel = Panel(panel)
-    study_name = get_study_name(exp_name="pred_diagnosis", model=model, panel=panel, nan_th=nan_th,
+    study_name = get_study_name(exp_name="prospective", model=model, panel=panel, nan_th=nan_th,
                                 corr_th=corr_th)
 
     ol_df, cov_df = load_olink_and_covariates(nan_th, nan_th, corr_th)
