@@ -174,6 +174,7 @@ def get_optuna_optimized_params(study_name, dataset, args):
             p.join()
     study_stats = {
         "best_trial_no": study.best_trial.number,
+        "best_trial_score": study.best_trial.value,
         "num_trials": len(study.get_trials(deepcopy=False, states=OPTUNA_STATE_CHECKED)),
     }
     return study.best_trial.params, study_stats
