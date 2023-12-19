@@ -1,12 +1,11 @@
 #!/bin/bash -l
 #SBATCH --job-name=ukb_olink
 #SBATCH --time=7-00:00:00
+#SBATCH --gres=gpu:8
 #SBATCH --partition=defq
 #SBATCH --output=olink2.log
 
 module load singularity
-
-export exp_number=4
 
 script_text="
 cd /olink/biobank_olink
@@ -15,7 +14,7 @@ export PATH=\$HOME/.local/bin:\$PATH
 
 clear
 
-case \$exp_number in
+case $1 in
 1)
     biobank_olink cross-sectional-adj \
         --target sbp \
@@ -34,9 +33,12 @@ case \$exp_number in
     biobank_olink cross-sectional \
         --model xgb \
         --panel all \
+        --lifestyle \
+        --ext \
+        --olink \
         --nan_th 0 \
         --corr_th 0.9 \
-        --n_trials 300 \
+        --n_trials 100 \
         --outer_splits 5 \
         --inner_splits 5 \
         --optuna_n_workers 8 \
@@ -45,8 +47,8 @@ case \$exp_number in
 3)
     biobank_olink prospective \
         --model xgb \
-        --panel all \
         --years 10 \
+        --panel all \
         --lifestyle \
         --ext \
         --nan_th 0 \
@@ -81,7 +83,7 @@ case \$exp_number in
         --num_gpus \"\${SLURM_GPUS_ON_NODE}\"
     ;;
 *)
-    echo \"Wrong number $exp_number\"
+    echo \"Wrong number $1\"
     exit 1
     ;;
 esac
