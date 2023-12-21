@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-all = ["jupyter"]
+all = ["jupyter", "openpyxl"]
 
 [project.scripts]
 biobank_olink = "biobank_olink.cli:run_cli"

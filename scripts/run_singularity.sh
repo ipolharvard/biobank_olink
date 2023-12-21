@@ -1,9 +1,9 @@
 #!/bin/bash -l
 #SBATCH --job-name=ukb_olink
-#SBATCH --time=7-00:00:00
+#SBATCH --time=12:00:00
 #SBATCH --gres=gpu:8
 #SBATCH --partition=defq
-#SBATCH --output=olink2.log
+#SBATCH --output=olink.log
 
 module load singularity
 
@@ -11,7 +11,6 @@ script_text="
 cd /olink/biobank_olink
 python setup.py develop --user --no-deps
 export PATH=\$HOME/.local/bin:\$PATH
-
 clear
 
 case $1 in
@@ -32,13 +31,13 @@ case $1 in
 2)
     biobank_olink cross-sectional \
         --model xgb \
-        --panel all \
+        --panel renal \
         --lifestyle \
         --ext \
         --olink \
         --nan_th 0 \
         --corr_th 0.9 \
-        --n_trials 100 \
+        --n_trials 150 \
         --outer_splits 5 \
         --inner_splits 5 \
         --optuna_n_workers 8 \
@@ -48,12 +47,13 @@ case $1 in
     biobank_olink prospective \
         --model xgb \
         --years 10 \
-        --panel all \
+        --panel immune \
         --lifestyle \
         --ext \
+        --olink \
         --nan_th 0 \
         --corr_th 0.9 \
-        --n_trials 300 \
+        --n_trials 100 \
         --outer_splits 5 \
         --inner_splits 5 \
         --optuna_n_workers 8 \

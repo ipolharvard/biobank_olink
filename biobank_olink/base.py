@@ -1,7 +1,3 @@
-"""
-Contains the base code for the experiment that is invoked by the CLI. Check commands dir for more
-info.
-"""
 import json
 import time
 import traceback
@@ -16,6 +12,7 @@ import optuna
 import shap
 from optuna._callbacks import MaxTrialsCallback
 from optuna.storages import JournalStorage, JournalFileStorage
+from optuna.trial import TrialState
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
@@ -176,6 +173,7 @@ def get_optuna_optimized_params(study_name, dataset, args):
         "best_trial_no": study.best_trial.number,
         "best_trial_score": study.best_trial.value,
         "num_trials": len(study.get_trials(deepcopy=False, states=OPTUNA_STATE_CHECKED)),
+        "num_failed_trials": len(study.get_trials(deepcopy=False, states=[TrialState.FAIL])),
     }
     return study.best_trial.params, study_stats
 

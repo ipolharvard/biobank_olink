@@ -4,7 +4,7 @@ from importlib.resources import files
 from optuna.trial import TrialState
 
 PROJECT_DATA = files("biobank_olink.data")
-PROJECT_ROOT = PROJECT_DATA / ".." / ".."
+PROJECT_ROOT = (PROJECT_DATA / ".." / "..").resolve()
 
 SEED = 42
 
