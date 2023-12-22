@@ -6,7 +6,8 @@ cache
 figs
 optuna_db
 results
-results_old
+# contains information that we dont want to upload to github
+scripts/get_container.sh
 
 ### JupyterNotebooks template
 # gitignore template for Jupyter Notebooks

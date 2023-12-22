@@ -9,6 +9,7 @@ from multiprocessing import Process, Manager
 
 import numpy as np
 import optuna
+import pandas as pd
 import shap
 from optuna._callbacks import MaxTrialsCallback
 from optuna.storages import JournalStorage, JournalFileStorage
@@ -228,10 +229,14 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
     if args.__dict__.get("dump_model") and args.model == Model.XGBOOST:
         MODEL_DUMP_DIR.mkdir(exist_ok=True)
         model.save_model(MODEL_DUMP_DIR / f"{study_name}_model.ubj")
-        np.savetxt(MODEL_DUMP_DIR / f"{study_name}_x_train.txt", x_train)
-        np.savetxt(MODEL_DUMP_DIR / f"{study_name}_x_test.txt", x_test)
-        np.savetxt(MODEL_DUMP_DIR / f"{study_name}_y_train.txt", y_train)
-        np.savetxt(MODEL_DUMP_DIR / f"{study_name}_y_test.txt", y_test)
+        x_train.to_csv(MODEL_DUMP_DIR / f"{study_name}_x_train.csv.gz", index=False,
+                       compression="gzip")
+        x_test.to_csv(MODEL_DUMP_DIR / f"{study_name}_x_test.csv.gz", index=False,
+                      compression="gzip")
+        pd.Series(y_train, name="y_train").to_csv(
+            MODEL_DUMP_DIR / f"{study_name}_y_train.csv.gz", index=False, compression="gzip")
+        pd.Series(y_test, name="y_test").to_csv(
+            MODEL_DUMP_DIR / f"{study_name}_y_test.csv.gz", index=False, compression="gzip")
 
 
 def run_optuna_pipeline(x, y, exp_props, dump_results: bool = True):
