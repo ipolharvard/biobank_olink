@@ -21,7 +21,7 @@ from torchtuples.callbacks import EarlyStopping
 from xgboost import XGBClassifier
 
 from .constants import OPTUNA_DB_DIR, OPTUNA_STATE_CHECKED, Model, MAX_OUTER_SPLITS, \
-    MAX_INNER_SPLITS, RESULTS_DIR
+    MAX_INNER_SPLITS, RESULTS_DIR, MODEL_DUMP_DIR
 from .constants import SEED
 from .transformer import get_transformer, Tokenizer
 from .utils import get_gpu_id, get_logger
@@ -224,6 +224,14 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
 
     sh_dict[fold_num] = summary
     logger.info(f"Fold completed - '{study_name}', auc_score: {summary['auc_score']:.4f}")
+
+    if args.__dict__.get("dump_model") and args.model == Model.XGBOOST:
+        MODEL_DUMP_DIR.mkdir(exist_ok=True)
+        model.save_model(MODEL_DUMP_DIR / f"{study_name}_model.ubj")
+        np.savetxt(MODEL_DUMP_DIR / f"{study_name}_x_train.txt", x_train)
+        np.savetxt(MODEL_DUMP_DIR / f"{study_name}_x_test.txt", x_test)
+        np.savetxt(MODEL_DUMP_DIR / f"{study_name}_y_train.txt", y_train)
+        np.savetxt(MODEL_DUMP_DIR / f"{study_name}_y_test.txt", y_test)
 
 
 def run_optuna_pipeline(x, y, exp_props, dump_results: bool = True):

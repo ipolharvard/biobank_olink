@@ -10,6 +10,7 @@ SEED = 42
 
 RESULTS_DIR = PROJECT_ROOT / "results"
 OPTUNA_DB_DIR = PROJECT_ROOT / "optuna_dbs"
+MODEL_DUMP_DIR = PROJECT_ROOT / "model_dump"
 OPTUNA_STATE_CHECKED = (TrialState.PRUNED, TrialState.COMPLETE)
 
 FEAT_IMP_DIR = PROJECT_DATA / "feat_importances"
