@@ -233,9 +233,9 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
                        compression="gzip")
         x_test.to_csv(MODEL_DUMP_DIR / f"{study_name}_x_test.csv.gz", index=False,
                       compression="gzip")
-        pd.Series(y_train, name="y_train").to_csv(
+        pd.Series(y_train.squeeze(), name="y_train").to_csv(
             MODEL_DUMP_DIR / f"{study_name}_y_train.csv.gz", index=False, compression="gzip")
-        pd.Series(y_test, name="y_test").to_csv(
+        pd.Series(y_test.squeeze(), name="y_test").to_csv(
             MODEL_DUMP_DIR / f"{study_name}_y_test.csv.gz", index=False, compression="gzip")
 
 

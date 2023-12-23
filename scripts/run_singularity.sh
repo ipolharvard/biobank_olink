@@ -47,7 +47,7 @@ case $1 in
     biobank_olink prospective \
         --model xgb \
         --years 10 \
-        --panel immune \
+        --panel all \
         --lifestyle \
         --ext \
         --olink \
