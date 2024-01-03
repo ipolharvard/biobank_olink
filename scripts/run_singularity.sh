@@ -1,9 +1,9 @@
 #!/bin/bash -l
 #SBATCH --job-name=ukb_olink
-#SBATCH --time=12:00:00
-#SBATCH --gres=gpu:8
+#SBATCH --time=3-00:00:00
+#SBATCH --cpus-per-task=128
 #SBATCH --partition=defq
-#SBATCH --output=olink.log
+#SBATCH --output=olink2.log
 
 module load singularity
 
@@ -18,7 +18,7 @@ case $1 in
     biobank_olink cross-sectional-adj \
         --target sbp \
         --model xgb \
-        --panel all \
+        --panel immune_infla2 \
         --threshold 0.35 \
         --nan_th 0 \
         --corr_th 0.9 \
@@ -81,6 +81,11 @@ case $1 in
         --inner_splits 2 \
         --optuna_n_workers 1 \
         --num_gpus \"\${SLURM_GPUS_ON_NODE}\"
+    ;;
+6)
+    biobank_olink interactions \
+        --n_jobs 128 \
+        --fold 0
     ;;
 *)
     echo \"Wrong number $1\"

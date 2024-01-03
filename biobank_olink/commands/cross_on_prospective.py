@@ -111,7 +111,7 @@ def cross_on_prospective(
         paired_up_df["dist"] = similarities_df.min()
         paired_up_df2 = similarities_sub_df.T.idxmin().to_frame("p2_id")
         paired_up_df2["dist"] = similarities_df.T.min()
-        paired_up_df = pd.concat([paired_up_df, paired_up_df2]);
+        paired_up_df = pd.concat([paired_up_df, paired_up_df2])
         paired_up_df.sort_values(by="dist", inplace=True)
 
         chosen = set()
