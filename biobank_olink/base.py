@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime
 from functools import partial
 from multiprocessing import Process, Manager
+from pathlib import Path
 
 import numpy as np
 import optuna
@@ -22,7 +23,7 @@ from torchtuples.callbacks import EarlyStopping
 from xgboost import XGBClassifier
 
 from .constants import OPTUNA_DB_DIR, OPTUNA_STATE_CHECKED, Model, MAX_OUTER_SPLITS, \
-    MAX_INNER_SPLITS, RESULTS_DIR, MODEL_DUMP_DIR
+    MAX_INNER_SPLITS, RESULTS_DIR, PROJECT_DATA
 from .constants import SEED
 from .transformer import get_transformer, Tokenizer
 from .utils import get_gpu_id, get_logger
@@ -227,16 +228,15 @@ def one_fold_experiment_run(sh_dict, temp_dataset, test_dataset, fold_num, args)
     logger.info(f"Fold completed - '{study_name}', auc_score: {summary['auc_score']:.4f}")
 
     if args.__dict__.get("dump_model") and args.model == Model.XGBOOST:
-        MODEL_DUMP_DIR.mkdir(exist_ok=True)
-        model.save_model(MODEL_DUMP_DIR / f"{study_name}_model.ubj")
-        x_train.to_csv(MODEL_DUMP_DIR / f"{study_name}_x_train.csv.gz", index=False,
-                       compression="gzip")
-        x_test.to_csv(MODEL_DUMP_DIR / f"{study_name}_x_test.csv.gz", index=False,
-                      compression="gzip")
-        pd.Series(y_train.squeeze(), name="y_train").to_csv(
-            MODEL_DUMP_DIR / f"{study_name}_y_train.csv.gz", index=False, compression="gzip")
-        pd.Series(y_test.squeeze(), name="y_test").to_csv(
-            MODEL_DUMP_DIR / f"{study_name}_y_test.csv.gz", index=False, compression="gzip")
+        model_dump_dir: Path = PROJECT_DATA / args.study_name / f"f{fold_num}"
+        model_dump_dir.mkdir(exist_ok=True, parents=True)
+        model.save_model(model_dump_dir / "model.ubj")
+        x_train.to_csv(model_dump_dir / "x_train.csv.gz", index=False, compression="gzip")
+        x_test.to_csv(model_dump_dir / "x_test.csv.gz", index=False, compression="gzip")
+        pd.Series(y_train.squeeze(), name="y_train").to_csv(model_dump_dir / "y_train.csv.gz",
+                                                            index=False, compression="gzip")
+        pd.Series(y_test.squeeze(), name="y_test").to_csv(model_dump_dir / "y_test.csv.gz",
+                                                          index=False, compression="gzip")
 
 
 def run_optuna_pipeline(x, y, exp_props, dump_results: bool = True):

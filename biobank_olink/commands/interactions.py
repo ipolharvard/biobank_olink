@@ -1,11 +1,11 @@
 from multiprocessing import set_start_method
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from click import command, option
+from click import command, option, argument
 
-from biobank_olink.constants import PROJECT_DATA, PROJECT_ROOT
 from biobank_olink.interactions import generate_interactions
 from biobank_olink.utils import get_logger
 
@@ -13,26 +13,28 @@ logger = get_logger()
 
 
 @command
+@argument("dump_path", type=str)
 @option("--fold", type=int, default=0, show_default=True, help="Fold number.")
 @option("--n_jobs", type=int, default=1, show_default=True, help="Number of parallel jobs.")
-def interactions(fold: int, n_jobs: int):
+def interactions(dump_path: str, fold: int, n_jobs: int):
     """Interactions between Olink and other variables."""
     set_start_method("spawn")
-    study_name = "prospective_xgb_corr0.9_y10_lifestyle_ext_olink"
 
+    data_path = Path(dump_path) / f"f{fold}"
+    study_name = data_path.parent.name
     logger.info(f"Loading model '{study_name}'")
 
-    data_path = PROJECT_DATA / 'model_dump'
     model = xgb.Booster()
-    fold_part = f"_f{fold}_"
-    x_train = pd.read_csv(data_path / (study_name + fold_part + "x_train.csv.gz"))
-    x_train = x_train.values.astype(np.float32)
-    model.load_model(data_path / (study_name + fold_part + "model.ubj"))
+    model.load_model(data_path / "model.ubj")
 
-    logger.info(f"Generating interactions for {len(x_train):,} samples using {n_jobs} workers, "
-                f"giving {len(x_train) // n_jobs:,} per worker.")
-    results = generate_interactions(x_train, model, n_jobs)
+    x_train = pd.read_csv(data_path / "x_train.csv.gz")
+    x_test = pd.read_csv(data_path / "x_test.csv.gz")
+    x = pd.concat([x_train, x_test])
 
-    interactions_path = data_path / (study_name + fold_part + "interactions.npz")
-    logger.info(f"Saving interactions to '{interactions_path.relative_to(PROJECT_ROOT)}'")
-    np.savez(interactions_path, results)
+    logger.info(f"Generating interactions for {len(x):,} samples using {n_jobs} workers, "
+                f"giving {len(x) // n_jobs:,} per worker.")
+    results = generate_interactions(x, model, n_jobs)
+
+    interactions_path = data_path / "interactions.npy"
+    logger.info(f"Saving interactions to '{interactions_path}'")
+    np.save(interactions_path, results)

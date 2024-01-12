@@ -60,6 +60,12 @@ logger = get_logger()
     help="do not optimize hyperparameters, evaluate best trials only",
 )
 @option(
+    "--dump_model",
+    is_flag=True,
+    default=False,
+    help="Save trained models and their datasets.",
+)
+@option(
     "-w",
     "--optuna_n_workers",
     type=int,
