@@ -5,20 +5,15 @@
 Work in the Conda environment:
 
 ```bash
-conda create -n ethos python=3.10
+conda create -n olink python=3.12
 ```
 
-Run this command to set up the repo in the development mode, to run experiments on a cluster `[all]`
-is not required:
+Run this command to set up the repo in the development mode. To run experiments related to
+clustering
+add this extension`[cluster]`:
 
 ```bash
-pip install -e .[all]
-```
-
-To obtain information about the capabilities of the package run the command below:
-
-```bash
-biobank_olink --help
+pip install -e .
 ```
 
 ### Data

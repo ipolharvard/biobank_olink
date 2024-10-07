@@ -7,21 +7,23 @@ authors = [
     { name = "Pawel Renc", email = "prenc@mgh.harvard.edu" },
 ]
 dependencies = [
-    "pandas",
-    "hdbscan",
-    "seaborn",
-    "scikit-learn",
-    "phate",
-    "shap",
-    "xgboost",
-    "optuna",
     "click",
     "kneed",
-    "wandb"
+    "pandas",
+    "scikit-learn",
+    "seaborn",
+    "shap",
+    "wandb",
+    "xgboost",
+    "polars",
+    "pyarrow",
+    "openpyxl",
+    "jupyter",
+    "optuna"
 ]
 
 [project.optional-dependencies]
-all = ["jupyter", "openpyxl"]
+cluster = ["hdbscan", "umap-learn", "phate"]
 torch = ["torch", "torchtuples"]
 
 
